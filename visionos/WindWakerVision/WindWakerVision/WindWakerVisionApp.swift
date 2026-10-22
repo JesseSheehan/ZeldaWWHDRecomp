@@ -40,7 +40,6 @@ struct TVWindow: View {
         MetalLayerView { GameLayerView() }
             .aspectRatio(16.0 / 9.0, contentMode: .fit)
             .onAppear {
-                openGamePad()
                 // Start (+) brings the GamePad window back: the game shows its menus there
                 StartButtonWatcher.shared.onPress = { [openWindow] in
                     if !GamePadWindowState.shared.open { openWindow(id: "gamepad", value: GamePadWindowState.value) }
@@ -87,9 +86,16 @@ final class StartButtonWatcher {
 }
 
 struct GamePadWindow: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var view = GamePadLayerView()
+
     var body: some View {
-        MetalLayerView { GamePadLayerView() }
+        MetalLayerView { view }
             .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            // a closed window may keep its view: follow the window itself (closed: picture-in-picture)
+            .onAppear { view.attach(true) }
+            .onDisappear { view.attach(false) }
+            .onChange(of: scenePhase) { _, phase in view.attach(phase != .background) }
             .ornament(attachmentAnchor: .scene(.bottom)) {
                 Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
                     .labelStyle(.iconOnly)
@@ -169,15 +175,11 @@ final class GameLayerView: GameControllerLayerView {
 
 /// The GamePad screen: a pinch or touch on it is a GamePad touch.
 final class GamePadLayerView: GameControllerLayerView {
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if window != nil {
-            wwhd_visionos_set_drc_layer(Unmanaged.passUnretained(layer).toOpaque())
-            updateDrawableSize()
-        } else {
-            wwhd_visionos_set_drc_layer(nil)  // closed: picture-in-picture in the TV window
-        }
-        GamePadWindowState.shared.open = window != nil
+    /// The window is open (the runtime presents the GamePad screen here) or closed.
+    func attach(_ open: Bool) {
+        wwhd_visionos_set_drc_layer(open ? Unmanaged.passUnretained(layer).toOpaque() : nil)
+        if open { updateDrawableSize() }
+        GamePadWindowState.shared.open = open
     }
 
     override func layoutSubviews() {
