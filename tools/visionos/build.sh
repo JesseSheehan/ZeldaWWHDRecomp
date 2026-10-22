@@ -51,14 +51,14 @@ BUILD="$(cd "$BUILD" && pwd)"
 # ---------------------------------------------------------------- prerequisites
 step "Checking the tools"
 command -v xcodebuild >/dev/null || die "Xcode is not installed (App Store), or not selected: sudo xcode-select -s /Applications/Xcode.app"
-XCODE="$(xcodebuild -version 2>/dev/null | head -1)"
+XCODE="$(xcodebuild -version 2>/dev/null | sed -n 1p)"
 [ -n "$XCODE" ] || die "xcodebuild does not run: open Xcode once to finish its setup, and check xcode-select -p"
 xcrun --sdk xros --show-sdk-path >/dev/null 2>&1 ||
     die "the visionOS SDK is missing: Xcode > Settings > Components, install visionOS"
 for tool in cmake ninja python3; do
     command -v "$tool" >/dev/null || die "$tool is missing (Homebrew: brew install $tool)"
 done
-echo "$XCODE, visionOS SDK $(xcrun --sdk xros --show-sdk-version), $(cmake --version | head -1), ninja $(ninja --version), $(python3 --version)"
+echo "$XCODE, visionOS SDK $(xcrun --sdk xros --show-sdk-version), $(cmake --version | sed -n 1p), ninja $(ninja --version), $(python3 --version)"
 
 # ---------------------------------------------------------------- the game
 if [ -n "$IMAGE$ARCHIVE" ]; then
@@ -74,12 +74,12 @@ if [ -n "$IMAGE$ARCHIVE" ]; then
     fi
     EXTRACT="$BUILD/host/wwhd-extract"
     if [ ! -x "$EXTRACT" ]; then
-        xcrun clang -O2 -w -DZSTD_DISABLE_ASM -DXXH_NAMESPACE=ZSTD_ -I"$ZSTD/lib" -c \
-            "$ZSTD"/lib/common/*.c "$ZSTD"/lib/decompress/*.c "$ZSTD"/lib/compress/*.c
-        mv ./*.o "$BUILD/host/" 2>/dev/null || true
+        mkdir -p "$BUILD/host/obj"
+        (cd "$BUILD/host/obj" && xcrun clang -O2 -w -DZSTD_DISABLE_ASM -DXXH_NAMESPACE=ZSTD_ -I"$ZSTD/lib" -c \
+            "$ZSTD"/lib/common/*.c "$ZSTD"/lib/decompress/*.c "$ZSTD"/lib/compress/*.c)
         xcrun clang++ -O2 -std=c++20 -I"$ZSTD/lib" -I"$REPO/tools/wudextract" -o "$EXTRACT" \
             "$REPO/tools/wudextract/wwhd_extract.cpp" "$REPO/tools/wudextract/zarchive.cpp" "$REPO/tools/wudextract/crypto.cpp" \
-            "$BUILD"/host/*.o
+            "$BUILD"/host/obj/*.o
     fi
     step "Extracting the game into $BUILD/game"
     rm -rf "$BUILD/game.partial"
