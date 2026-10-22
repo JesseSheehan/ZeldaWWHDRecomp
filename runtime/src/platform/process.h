@@ -11,6 +11,9 @@
 #endif
 #include <windows.h>
 #else
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -38,6 +41,10 @@ inline std::wstring process_quote(const std::wstring& s) {
 #endif
 inline ProcessResult run_process(const std::vector<std::string>& args,const std::string& directory={}) {
     ProcessResult result;
+#if defined(__APPLE__) && TARGET_OS_VISION
+    // apps cannot start other programs on visionOS
+    (void)args;(void)directory;result.error="Package preparation tools are unavailable on this platform";return result;
+#endif
     if(args.empty()||args.front().empty()){result.error="empty tool command";return result;}
     for(const auto& arg:args)if(arg.find('\0')!=std::string::npos){result.error="invalid tool argument";return result;}
     if(directory.find('\0')!=std::string::npos){result.error="invalid tool working directory";return result;}
@@ -76,7 +83,7 @@ inline ProcessResult run_process(const std::vector<std::string>& args,const std:
     posix_spawn_file_actions_addclose(&actions,pipefd[0]);
     posix_spawn_file_actions_addclose(&actions,pipefd[1]);
     if(!directory.empty()) {
-#if defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
+#if (defined(__APPLE__) && !TARGET_OS_VISION) || (defined(__linux__) && !defined(__ANDROID__))
         int error=posix_spawn_file_actions_addchdir_np(&actions,directory.c_str());
         if(error){posix_spawn_file_actions_destroy(&actions);close(pipefd[0]);close(pipefd[1]);result.error="cannot set tool working directory";return result;}
 #else

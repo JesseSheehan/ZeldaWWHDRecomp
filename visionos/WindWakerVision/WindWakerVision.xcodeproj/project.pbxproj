@@ -1,0 +1,226 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXFileReference section */
+		A10000000000000000000001 /* WindWakerVision.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WindWakerVision.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A10000000000000000000002 /* WindWakerVision */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WindWakerVision;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A10000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A10000000000000000000004 = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000002 /* WindWakerVision */,
+				A10000000000000000000005 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000001 /* WindWakerVision.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A10000000000000000000006 /* WindWakerVision */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000020 /* Build configuration list for PBXNativeTarget "WindWakerVision" */;
+			buildPhases = (
+				A10000000000000000000007 /* Sources */,
+				A10000000000000000000003 /* Frameworks */,
+				A10000000000000000000008 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000002 /* WindWakerVision */,
+			);
+			name = WindWakerVision;
+			productName = WindWakerVision;
+			productReference = A10000000000000000000001 /* WindWakerVision.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000000009 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+			};
+			buildConfigurationList = A10000000000000000000010 /* Build configuration list for PBXProject "WindWakerVision" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A10000000000000000000004;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A10000000000000000000005 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A10000000000000000000006 /* WindWakerVision */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A10000000000000000000008 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A10000000000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A10000000000000000000011 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = xros;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Debug;
+		};
+		A10000000000000000000012 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				SDKROOT = xros;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Release;
+		};
+		A10000000000000000000021 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.windwakervision.WindWakerVision;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_OBJC_BRIDGING_HEADER = "WindWakerVision/WindWakerVision-Bridging-Header.h";
+			CODE_SIGN_ENTITLEMENTS = "WindWakerVision/WindWakerVision.entitlements";
+			INFOPLIST_KEY_UIFileSharingEnabled = YES;
+			INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+			INFOPLIST_KEY_CFBundleDisplayName = "Wind Waker HD";
+			INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+			WWHD_RUNTIME_BUILD = "$(HOME)/Developer/WindWakerVision-work/build-xros";
+			LIBRARY_SEARCH_PATHS = ("$(WWHD_RUNTIME_BUILD)", "$(WWHD_RUNTIME_BUILD)/_deps/lz4-build");
+			OTHER_LDFLAGS = ("-Wl,-force_load,$(WWHD_RUNTIME_BUILD)/libwwhd.a", "-lgamecode", "-lcemu_latte", "-limgui", "-lwwhd_zstd_static", "-llz4", "-lz", "-lcompression", "-lc++", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "UIKit", "-framework", "ImageIO", "-framework", "UniformTypeIdentifiers", "-framework", "GameController", "-framework", "AudioToolbox", "-framework", "CoreGraphics");
+			DEAD_CODE_STRIPPING = NO;
+			ENABLE_DEBUG_DYLIB = NO;
+			ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
+			};
+			name = Debug;
+		};
+		A10000000000000000000022 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.windwakervision.WindWakerVision;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_OBJC_BRIDGING_HEADER = "WindWakerVision/WindWakerVision-Bridging-Header.h";
+			CODE_SIGN_ENTITLEMENTS = "WindWakerVision/WindWakerVision.entitlements";
+			INFOPLIST_KEY_UIFileSharingEnabled = YES;
+			INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+			INFOPLIST_KEY_CFBundleDisplayName = "Wind Waker HD";
+			INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+			WWHD_RUNTIME_BUILD = "$(HOME)/Developer/WindWakerVision-work/build-xros";
+			LIBRARY_SEARCH_PATHS = ("$(WWHD_RUNTIME_BUILD)", "$(WWHD_RUNTIME_BUILD)/_deps/lz4-build");
+			OTHER_LDFLAGS = ("-Wl,-force_load,$(WWHD_RUNTIME_BUILD)/libwwhd.a", "-lgamecode", "-lcemu_latte", "-limgui", "-lwwhd_zstd_static", "-llz4", "-lz", "-lcompression", "-lc++", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "UIKit", "-framework", "ImageIO", "-framework", "UniformTypeIdentifiers", "-framework", "GameController", "-framework", "AudioToolbox", "-framework", "CoreGraphics");
+			DEAD_CODE_STRIPPING = NO;
+			ENABLE_DEBUG_DYLIB = NO;
+			ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000000010 /* Build configuration list for PBXProject "WindWakerVision" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000011 /* Debug */,
+				A10000000000000000000012 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000020 /* Build configuration list for PBXNativeTarget "WindWakerVision" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000021 /* Debug */,
+				A10000000000000000000022 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A10000000000000000000009 /* Project object */;
+}

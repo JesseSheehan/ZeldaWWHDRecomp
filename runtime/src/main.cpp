@@ -372,7 +372,13 @@ static void start_log_file(bool error = false) {
 
 extern "C" void synthetic_game_frame(Cpu*, PpcFunc);
 
+#ifdef WWHD_VISIONOS
+// visionOS: the app (visionos/WindWakerVision) owns main() and the main thread's run loop; it calls
+// this on the main thread, and render::run_main_loop() returns at once there
+extern "C" int wwhd_runtime_main(int argc, char** argv) {
+#else
 int main(int argc, char** argv) {
+#endif
     std::string shader_prebuild_root;
     // Android's isolated preparation activity and normal SDL startup share the
     // same private user directory and verified native library identity.

@@ -1,0 +1,468 @@
+// visionOS host (Apple Vision Pro): what the AppKit host (gfx/display.mm, input.mm, menu.mm,
+// overlay_appkit.mm, mods/mouse.mm) does on macOS, for the visionOS app (visionos/WindWakerVision).
+//
+// The app owns main() and the main thread's run loop. It calls, on the main thread:
+//   wwhd_visionos_reserve_memory()  first thing at launch: the guest address space (mem::reserve)
+//   wwhd_visionos_set_layer(layer)  the CAMetalLayer of its view, which the TV picture is presented to
+//   wwhd_runtime_main(argc, argv)   main.cpp's start-up; returns once the game threads run
+//   wwhd_visionos_set_drawable_size(w, h, scale) whenever the view's size changes
+//
+// One window (the TV picture, the GamePad picture as picture-in-picture or alone), game controllers
+// through GameController.framework, settings in NSUserDefaults. No keyboard, mouse, menus or file
+// panels yet.
+#import <GameController/GameController.h>
+#import <Metal/Metal.h>
+#import <QuartzCore/QuartzCore.h>
+#import <UIKit/UIKit.h>
+#include <mach/mach.h>
+
+#include <algorithm>
+#include <atomic>
+#include <map>
+#include <mutex>
+#include <string>
+#include <tuple>
+
+#include "gfx/display.h"
+#include "gfx/display_modes.h"
+#include "gfx/metal.h"
+#include "gfx/renderer.h"
+#include "gx2/gx2.h"
+#include "input.h"
+#include "input_map.h"
+#include "interp.h"
+#include "imgui.h"
+#include "backends/imgui_impl_metal.h"
+#include "mods/mods.h"
+#include "overlay/guest_hud.h"
+#include "overlay/hostui.h"
+#include "overlay/overlay.h"
+#include "overlay/release_gate.h"
+#include "runtime.h"
+
+namespace gfx {
+extern Renderer R;
+}  // namespace gfx
+
+// ---------------------------------------------------------------- the app's calls
+static CAMetalLayer* g_layer;
+
+extern "C" int wwhd_visionos_reserve_memory() {
+    const int kr = mem::reserve();
+    if (kr == KERN_SUCCESS) return kr;
+    // what holds the address (the region at or after the guest base), for the log
+    vm_address_t a = (vm_address_t)PPC_MEM_BASE;
+    vm_size_t size = 0;
+    vm_region_basic_info_data_64_t info{};
+    mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t object = MACH_PORT_NULL;
+    const kern_return_t rr =
+        vm_region_64(mach_task_self(), &a, &size, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &count, &object);
+    fprintf(stderr, "[visionos] cannot reserve the guest address space at %p (kr=%d %s); region there: kr=%d %llx-%llx prot %d/%d\n",
+            PPC_MEM_BASE, kr, mach_error_string(kr), rr, (unsigned long long)a, (unsigned long long)(a + size), info.protection,
+            info.max_protection);
+    return kr;
+}
+
+extern "C" void wwhd_visionos_set_layer(void* layer) { g_layer = (__bridge CAMetalLayer*)layer; }
+
+extern "C" void wwhd_visionos_set_drawable_size(double w, double h, double scale) {
+    if (!g_layer) return;
+    g_layer.contentsScale = scale;
+    g_layer.drawableSize = CGSizeMake(std::max(1.0, w * scale), std::max(1.0, h * scale));
+    overlay::set_density((float)scale);
+}
+
+namespace gfx {
+// the picture's size at the full internal resolution (dynamic resolution renders it smaller; the layout stays)
+static float nominal_w(const Screen& s) { return s.tex ? float(s.tex.width) / s.dyn : 0.0f; }
+static float nominal_h(const Screen& s) { return s.tex ? float(s.tex.height) / s.dyn : 0.0f; }
+
+// ---------------------------------------------------------------- settings (NSUserDefaults, "wwhd." keys)
+bool host_setting(const char* key, std::string& value) {
+    NSString* v = [[NSUserDefaults standardUserDefaults] stringForKey:[@"wwhd." stringByAppendingString:@(key)]];
+    if (!v) return false;
+    value = v.UTF8String;
+    return true;
+}
+void set_host_setting(const char* key, const std::string& value) {
+    [[NSUserDefaults standardUserDefaults] setObject:@(value.c_str()) forKey:[@"wwhd." stringByAppendingString:@(key)]];
+}
+
+void show_startup_notice(const std::string& title, const std::string& text) {
+    LOG("[display] %s: %s", title.c_str(), text.c_str());
+}
+
+// the app's run loop is UIKit's: nothing to run here (main.cpp returns to the app)
+void run_appkit_loop() {}
+
+// ---------------------------------------------------------------- presentation (as display.mm)
+static const char* kPresentShader = R"(
+#include <metal_stdlib>
+using namespace metal;
+struct VOut { float4 pos [[position]]; float2 uv; };
+vertex VOut present_vs(uint vid [[vertex_id]], constant float4& rect [[buffer(0)]]) {
+    float2 p = float2((vid << 1) & 2, vid & 2);
+    VOut o;
+    o.uv = p * 0.5;
+    float2 ndc = rect.xy + p * 0.5 * rect.zw;
+    o.pos = float4(ndc.x * 2.0 - 1.0, 1.0 - ndc.y * 2.0, 0.0, 1.0);
+    return o;
+}
+struct Params { int conv; float sharp; float foot; };
+static float3 to_linear(float3 c) { return select(pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045); }
+static float3 to_srgb(float3 c) { return select(1.055 * pow(c, 1.0 / 2.4) - 0.055, c * 12.92, c <= 0.0031308); }
+fragment float4 present_fs(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]], sampler s [[sampler(0)]],
+                           constant Params& p [[buffer(0)]]) {
+    float2 size = float2(tex.get_width(), tex.get_height());
+    float2 uv = in.uv;
+    if (p.sharp > 1.0) {
+        float2 t = uv * size - 0.5, i = floor(t), f = t - i;
+        f = clamp((f - 0.5) * p.sharp + 0.5, 0.0, 1.0);
+        uv = (i + f + 0.5) / size;
+    }
+    float3 c;
+    if (p.foot > 1.25) {
+        float2 d = 0.25 * min(p.foot, 4.0) / size;
+        c = 0.25 * (tex.sample(s, uv + float2(-d.x, -d.y)).rgb + tex.sample(s, uv + float2(d.x, -d.y)).rgb +
+                    tex.sample(s, uv + float2(-d.x, d.y)).rgb + tex.sample(s, uv + float2(d.x, d.y)).rgb);
+    } else {
+        c = tex.sample(s, uv).rgb;
+    }
+    if (p.conv == 1) c = to_linear(saturate(c));
+    else if (p.conv == 2) c = to_srgb(saturate(c));
+    return float4(c, 1.0);
+}
+fragment float4 solid_fs(VOut in [[stage_in]], constant float4& color [[buffer(0)]]) { return color; }
+)";
+
+static id<MTLLibrary> g_lib;
+static id<MTLRenderPipelineState> pipeline(MTLPixelFormat fmt, bool solid, bool blend) {
+    static std::mutex mu;
+    static std::map<std::tuple<int, bool, bool>, id<MTLRenderPipelineState>> cache;
+    std::lock_guard<std::mutex> lk(mu);
+    auto key = std::make_tuple((int)fmt, solid, blend);
+    auto it = cache.find(key);
+    if (it != cache.end()) return it->second;
+    MTLRenderPipelineDescriptor* d = [MTLRenderPipelineDescriptor new];
+    d.vertexFunction = [g_lib newFunctionWithName:@"present_vs"];
+    d.fragmentFunction = [g_lib newFunctionWithName:solid ? @"solid_fs" : @"present_fs"];
+    d.colorAttachments[0].pixelFormat = fmt;
+    if (blend) {
+        auto* a = d.colorAttachments[0];
+        a.blendingEnabled = YES;
+        a.sourceRGBBlendFactor = a.sourceAlphaBlendFactor = solid ? MTLBlendFactorSourceAlpha : MTLBlendFactorBlendAlpha;
+        a.destinationRGBBlendFactor = a.destinationAlphaBlendFactor =
+            solid ? MTLBlendFactorOneMinusSourceAlpha : MTLBlendFactorOneMinusBlendAlpha;
+    }
+    NSError* err = nil;
+    id<MTLRenderPipelineState> p = [R.device newRenderPipelineStateWithDescriptor:d error:&err];
+    if (!p) fatal("present pipeline: %s", err.localizedDescription.UTF8String);
+    cache[key] = p;
+    return p;
+}
+
+static bool is_srgb(MTLPixelFormat f) { return f == MTLPixelFormatBGRA8Unorm_sRGB || f == MTLPixelFormatRGBA8Unorm_sRGB; }
+
+static void draw_image(id<MTLRenderCommandEncoder> e, MTLPixelFormat fmt, float dw, float dh, id<MTLTexture> tex,
+                       bool src_linear, Box b, float alpha, float dyn) {
+    if (!tex || b.w <= 0 || b.h <= 0) return;
+    float rect[4] = {b.x / dw, b.y / dh, b.w / dw, b.h / dh};
+    bool blend = alpha < 0.999f;
+    [e setRenderPipelineState:pipeline(fmt, false, blend)];
+    if (blend) [e setBlendColorRed:0 green:0 blue:0 alpha:alpha];
+    struct { int conv; float sharp, foot; } p;
+    bool dst_linear = is_srgb(fmt);
+    p.conv = src_linear == dst_linear ? 0 : dst_linear ? 1 : 2;
+    float scale = std::min(b.w / tex.width, b.h / tex.height);
+    int filter = g_filter;
+    float sharpScale = scale;
+    if (dyn < 1.0f) {
+        if (filter == kInteger) filter = kSmooth;
+        else if (filter == kSharp) sharpScale = std::min(b.w / (tex.width / dyn), b.h / (tex.height / dyn));
+    }
+    p.sharp = filter == kSmooth || sharpScale <= 1.0f ? 1.0f : filter == kSharp ? sharpScale : 1e4f;
+    p.foot = scale < 1.0f ? 1.0f / scale : 1.0f;
+    [e setVertexBytes:rect length:sizeof rect atIndex:0];
+    [e setFragmentTexture:tex atIndex:0];
+    [e setFragmentBytes:&p length:sizeof p atIndex:0];
+    [e setFragmentSamplerState:R.linearClamp atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+}
+
+static void draw_solid(id<MTLRenderCommandEncoder> e, MTLPixelFormat fmt, float dw, float dh, Box b, const float rgba[4]) {
+    float rect[4] = {b.x / dw, b.y / dh, b.w / dw, b.h / dh};
+    [e setRenderPipelineState:pipeline(fmt, true, true)];
+    [e setVertexBytes:rect length:sizeof rect atIndex:0];
+    [e setFragmentBytes:rgba length:16 atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+}
+
+static ImDrawData* g_overlay_draw = nullptr;
+static void overlay_metal_init() { ImGui_ImplMetal_Init(R.device); }
+
+// the window's picture: TV image scaled to fit, GamePad picture-in-picture, settings overlay on top
+static void compose_tv(id<MTLTexture> target, const Layout& L) {
+    MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    rp.colorAttachments[0].texture = target;
+    rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+    rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> e = [command_buffer() renderCommandEncoderWithDescriptor:rp];
+    float dw = target.width, dh = target.height;
+    MTLPixelFormat fmt = target.pixelFormat;
+    draw_image(e, fmt, dw, dh, R.tv.tex, R.tv.srgb, L.tv, 1.0f, R.tv.dyn);
+    if (L.pip_on && R.drc.tex) {
+        float op = L.drc_only ? 1.0f : g_pip_opacity.load(), bw = std::max(1.0f, roundf(L.pip.w / 200.0f));
+        float frame[4] = {0, 0, 0, 0.6f * op};
+        draw_solid(e, fmt, dw, dh, {L.pip.x - bw, L.pip.y - bw, L.pip.w + 2 * bw, L.pip.h + 2 * bw}, frame);
+        draw_image(e, fmt, dw, dh, R.drc.tex, R.drc.srgb, L.pip, op, R.drc.dyn);
+        if (auto* draw = overlay::guesthud::gamepad_region(dw, dh, L.pip.x, L.pip.y, L.pip.w, L.pip.h, op)) {
+            if (is_srgb(fmt)) overlay::linearize_colors(draw, true);
+            ImGui_ImplMetal_NewFrame(rp);
+            ImGui_ImplMetal_RenderDrawData(draw, command_buffer(), e);
+        }
+    }
+    if (g_overlay_draw) {
+        if (is_srgb(fmt)) overlay::linearize_colors(g_overlay_draw);
+        ImGui_ImplMetal_NewFrame(rp);
+        ImGui_ImplMetal_RenderDrawData(g_overlay_draw, command_buffer(), e);
+    }
+    [e endEncoding];
+}
+
+// Metal renderer start-up (metal_main.mm): the app's layer, input, the presentation pipelines
+void display_init() {
+    if (!g_layer) fatal("visionOS: no layer (wwhd_visionos_set_layer before wwhd_runtime_main)");
+    g_mode = kDrcPip;  // one window: the GamePad picture as picture-in-picture
+    g_shown = true;
+    display_env_overrides();
+    CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    g_layer.colorspace = cs;
+    CGColorSpaceRelease(cs);
+    g_layer.device = R.device;
+    g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    g_layer.framebufferOnly = YES;
+    g_layer.maximumDrawableCount = 3;
+    R.tv.layer = g_layer;
+    R.drc.layer = nil;
+    R.drc.visible = false;
+    interp::set_display_hz(90);
+    input::init();
+    NSError* err = nil;
+    g_lib = [R.device newLibraryWithSource:@(kPresentShader) options:nil error:&err];
+    if (!g_lib) fatal("present shader: %s", err.localizedDescription.UTF8String);
+    R.presentPipeline = pipeline(MTLPixelFormatBGRA8Unorm, false, false);
+    R.presentPipelineSRGB = pipeline(MTLPixelFormatBGRA8Unorm_sRGB, false, false);
+    MTLSamplerDescriptor* sd = [MTLSamplerDescriptor new];
+    sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear;
+    sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
+    R.linearClamp = [R.device newSamplerStateWithDescriptor:sd];
+    LOG("[visionos] display ready (%.0fx%.0f)", g_layer.drawableSize.width, g_layer.drawableSize.height);
+}
+
+// Metal, called from swap() on the render thread: compose and present the window
+void present_screens() {
+    Screen& scr = R.tv;
+    CGSize ls = scr.layer ? scr.layer.drawableSize : CGSizeMake(0, 0);
+    PresentPlan P = display_plan(R.tv.tex != nil, nominal_w(R.tv), nominal_h(R.tv), R.drc.tex != nil, nominal_w(R.drc),
+                                 nominal_h(R.drc), ls.width, ls.height, R.frame);
+    Layout L;
+    L.tv = P.tv;
+    L.pip = P.pip;
+    L.pip_on = P.pip_on;
+    L.drc_only = P.drc_only;
+    L.scale = P.scale;
+    if (overlay::guesthud::active()) overlay::guesthud::set_tv_region(P.tv.x, P.tv.y, P.tv.w, P.tv.h, !P.drc_only);
+    g_overlay_draw = overlay::frame(P.dw, P.dh, overlay_metal_init);
+    if (!scr.layer || !scr.tex) return;
+    MTLPixelFormat want = scr.srgb ? MTLPixelFormatBGRA8Unorm_sRGB : MTLPixelFormatBGRA8Unorm;
+    if (scr.layer.pixelFormat != want) scr.layer.pixelFormat = want;
+    id<CAMetalDrawable> drawable = scr.visible ? [scr.layer nextDrawable] : nil;
+    if (!drawable) return;
+    static bool first = true;
+    if (first) {
+        first = false;
+        LOG("[visionos] first frame presented (frame %llu, picture %.0fx%.0f, drawable %.0fx%.0f)", (unsigned long long)R.frame,
+            nominal_w(R.tv), nominal_h(R.tv), ls.width, ls.height);
+    }
+    compose_tv(drawable.texture, L);
+    [command_buffer() presentDrawable:drawable];
+}
+
+}  // namespace gfx
+
+// ---------------------------------------------------------------- settings overlay host (overlay/hostui.h)
+namespace hostui {
+void post(std::function<void()> fn) { dispatch_async(dispatch_get_main_queue(), ^{ fn(); }); }
+void choose_file(const char*, const char*, bool, std::function<void(std::string)>) { LOG("[visionos] no file panel yet"); }
+void choose_mod_source(bool, std::function<void(std::string)>) { LOG("[visionos] no file panel yet"); }
+void choose_game_source(bool, std::function<void(std::string)>) { LOG("[visionos] no file panel yet"); }
+bool get(const char* key, std::string& value) { return gfx::host_setting(key, value); }
+void set(const char* key, const std::string& value) { gfx::set_host_setting(key, value); }
+float res_scale() { return render::res_scale(); }
+void set_res_scale(float s) { render::set_res_scale(s); }
+void graphics_changed() {}
+int scale_filter() { return gfx::g_filter; }
+void set_scale_filter(int f) { gfx::g_filter = std::clamp(f, 0, 2); }
+bool scale_filter_available() { return true; }
+bool fullscreen() { return true; }
+void set_fullscreen(bool) {}
+int drc_modes() { return gfx::kDrcModeCount; }
+bool drc_mode_offered(int m) { return m != gfx::kDrcWindow && m >= 0 && m < gfx::kDrcModeCount; }  // one window
+int drc_mode() { return gfx::g_mode; }
+void set_drc_mode(int m) { if (drc_mode_offered(m)) gfx::display_set_mode(m); }
+void save_pip_position() {}
+int pip_anchor() { return gfx::g_pip_anchor; }
+void set_pip_anchor(int c) { gfx::g_pip_anchor = std::clamp(c, 0, int(gfx::kPipCustom)); }
+float pip_size() { return gfx::g_pip_size; }
+void set_pip_size(float s) { gfx::g_pip_size = gfx::pip_clamp_size(s); }
+float pip_opacity() { return gfx::g_pip_opacity; }
+void set_pip_opacity(float o) { gfx::g_pip_opacity = gfx::pip_clamp_opacity(o); }
+bool drc_available() { return true; }
+bool drc_shown() { return gfx::drc_screen_shown(false); }
+void show_drc(bool on) { gfx::display_show_drc(on); }
+void set_pro_controller(bool on) {
+    input::set_pro_controller(on);
+    gfx::display_show_drc(!on);
+}
+const char* name() { return "visionOS"; }
+void set_clipboard(const std::string& text) { UIPasteboard.generalPasteboard.string = @(text.c_str()); }
+bool can_open_folder() { return false; }
+void open_folder(const std::string&) {}
+void quit() { exit(0); }
+}  // namespace hostui
+
+// ---------------------------------------------------------------- mouse camera (mods/mouse.mm): no mouse
+namespace mods {
+bool mouse_captured() { return false; }
+void mouse_release() {}
+}  // namespace mods
+
+// ---------------------------------------------------------------- game controllers (as input.mm)
+namespace input {
+
+static std::mutex g_mu;
+static PadState g_pad;
+static float g_host_values[input_map::kPadCount];
+static bool g_touch;
+static float g_tx, g_ty;
+static std::atomic<bool> g_pro{false};
+static std::atomic<void (*)(bool)> g_controller_listener{nullptr};
+
+void set_touch(bool down, float x, float y) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    g_touch = down;
+    g_tx = x;
+    g_ty = y;
+}
+
+void mouse_binding_button(uint64_t, int, bool, bool) {}
+void mouse_binding_wheel(float, bool) {}
+void release_mouse_bindings() {}
+bool gameplay_focused() { return true; }
+void release_keys() {}
+void held_keys(bool* keys) { std::fill(keys, keys + 256, false); }
+bool has_rumble() { return false; }
+void stop_rumble_now() {}
+bool pro_controller() { return g_pro.load(std::memory_order_relaxed); }
+void set_controller_listener(void (*fn)(bool pro)) { g_controller_listener = fn; }
+void set_pro_controller(bool on) {
+    const bool was = g_pro.exchange(on);
+    LOG("[input] controller acts as %s", on ? "Pro Controller" : "GamePad");
+    if (was != on)
+        if (auto fn = g_controller_listener.load()) fn(on);
+}
+
+// every mappable input of one controller, 0..1; false: not a gamepad
+static bool device_values(GCController* c, float* v) {
+    using namespace input_map;
+    for (int i = 0; i < kPadCount; i++) v[i] = 0;
+    GCExtendedGamepad* g = c.extendedGamepad;
+    if (!g) return false;
+    auto put = [&](int p, float x) { if (x > v[p]) v[p] = x; };
+    const auto layout = apple_face_layout(c.productCategory.UTF8String, c.vendorName.UTF8String);
+    auto b = [&](GCControllerButtonInput* in, int p) {
+        if (in) put(apple_face_input(layout, p), in.isPressed ? std::max(in.value, 0.51f) : std::min(in.value, 0.5f));
+    };
+    b(g.buttonA, kPadA); b(g.buttonB, kPadB); b(g.buttonX, kPadX); b(g.buttonY, kPadY);
+    b(g.leftShoulder, kPadLB); b(g.rightShoulder, kPadRB);
+    b(g.leftTrigger, kPadLT); b(g.rightTrigger, kPadRT);
+    b(g.buttonMenu, kPadMenu); b(g.buttonOptions, kPadOptions); b(g.buttonHome, kPadHome);
+    b(g.leftThumbstickButton, kPadL3); b(g.rightThumbstickButton, kPadR3);
+    b(g.dpad.up, kPadDUp); b(g.dpad.down, kPadDDown); b(g.dpad.left, kPadDLeft); b(g.dpad.right, kPadDRight);
+    auto stick = [&](GCControllerDirectionPad* d, int up, int down, int left, int right) {
+        float x = d.xAxis.value, y = d.yAxis.value;
+        put(right, std::max(x, 0.f)); put(left, std::max(-x, 0.f));
+        put(up, std::max(y, 0.f)); put(down, std::max(-y, 0.f));
+    };
+    stick(g.leftThumbstick, kPadLSUp, kPadLSDown, kPadLSLeft, kPadLSRight);
+    stick(g.rightThumbstick, kPadRSUp, kPadRSDown, kPadRSLeft, kPadRSRight);
+    return true;
+}
+
+static std::vector<std::pair<uintptr_t, overlay::PadValues>> devices_values() {
+    std::vector<std::pair<uintptr_t, overlay::PadValues>> out;
+    for (GCController* c in [GCController controllers]) {
+        overlay::PadValues d;
+        if (device_values(c, d.data())) out.emplace_back((uintptr_t)(__bridge void*)c, d);
+    }
+    return out;
+}
+
+void controller_values(float* v) {
+    using namespace input_map;
+    for (int i = 0; i < kPadCount; i++) v[i] = 0;
+    for (const auto& [id, d] : devices_values())
+        for (int p = 0; p < kPadCount; p++) v[p] = std::max(v[p], d[p]);
+}
+void host_controller_values(float* v) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    std::copy(g_host_values, g_host_values + input_map::kPadCount, v);
+}
+
+void init() {
+    input_map::load_startup();
+    [[NSNotificationCenter defaultCenter] addObserverForName:GCControllerDidConnectNotification object:nil queue:nil
+                                                  usingBlock:^(NSNotification* n) {
+        GCController* c = n.object;
+        LOG("[input] controller connected: %s", c.vendorName.UTF8String ?: "?");
+    }];
+    // GameController values are polled on the main thread
+    [NSTimer scheduledTimerWithTimeInterval:1.0 / 240 repeats:YES block:^(NSTimer*) {
+        float v[input_map::kPadCount], game[input_map::kPadCount];
+        static overlay::DeviceGates<uintptr_t> gates;
+        gates.combine(devices_values(), overlay::captures() || overlay::shortcut_took_input(), v, game);
+        input_map::consume_shortcut_buttons(input_map::current(), v, game);
+        PadState s = input_map::controller_state(input_map::current(), game);
+        std::lock_guard<std::mutex> lk(g_mu);
+        g_pad = s;
+        std::copy(v, v + input_map::kPadCount, g_host_values);
+    }];
+}
+
+PadState read() {
+    PadState s;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        s = g_pad;
+        s.touch = g_touch;
+        s.tx = g_tx;
+        s.ty = g_ty;
+    }
+    mods::filter_pad(s);
+    if (overlay::blocks_input()) {
+        mods::quick_use_reset();
+        s = PadState{};
+    } else {
+        mods::quick_use_filter_pad(s);
+    }
+    return s;
+}
+
+void prompt_text(const std::u16string& initial, int, std::function<void(bool ok, std::u16string text)> done) {
+    // no text prompt yet: the game's name entry keeps its default
+    dispatch_async(dispatch_get_main_queue(), ^{ done(false, initial); });
+}
+
+}  // namespace input

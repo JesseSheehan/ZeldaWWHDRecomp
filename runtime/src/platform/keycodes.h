@@ -1,8 +1,11 @@
 #pragma once
 // Stable physical key IDs used in controls.json; identical across host platforms.
 #ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+#if defined(__APPLE__) && !TARGET_OS_VISION
 #include <Carbon/Carbon.h>
-#else
+#else  // the same values as Carbon's kVK_ codes (visionOS has no Carbon)
 enum {
     kVK_ANSI_A = 0x00,
     kVK_ANSI_S = 0x01,

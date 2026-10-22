@@ -25,6 +25,9 @@ constexpr uint32_t kMem1Size = 0x02000000;
 constexpr uint32_t kHleFuncBase = 0xC2000000;  // synthetic addresses of host functions
 
 void init();
+#ifdef __APPLE__
+int reserve();  // reserve the guest address space now (kern_return_t); init() does it otherwise
+#endif
 // bump allocator for runtime-owned guest memory (never freed). Guest-visible objects (the game may
 // keep pointers to them) go through runtime_alloc and are part of save states; scratch memory that
 // only host code uses (shader copies, service thread stacks) through host_alloc.

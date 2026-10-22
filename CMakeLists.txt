@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
 project(wwhd_recomp C CXX)
+# visionOS (Apple Vision Pro, docs/visionos.md): Metal only, the runtime as a static library that the
+# visionOS app (visionos/WindWakerVision) links; its host (window, input) is runtime/src/platform/visionos
+set(WWHD_VISIONOS OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+  set(WWHD_VISIONOS ON)
+  set(WWHD_RENDERER METAL CACHE STRING "Graphics backends: BOTH, METAL or VULKAN" FORCE)
+  set(WWHD_EDITOR_MCP OFF CACHE BOOL "world editor: the MCP interface for tool clients" FORCE)
+  enable_language(OBJCXX)
+endif()
 # Renderers compiled into the executable:
 #   BOTH   (macOS default) Metal and Vulkan (MoltenVK) in one app; Graphics > Renderer picks one at start
 #   METAL  Metal only (macOS)
@@ -242,6 +251,13 @@ if(WWHD_HAS_METAL)
   # Metal renderer and the AppKit host (windows, menus, input, controls window, display modes)
   file(GLOB METAL_SOURCES CONFIGURE_DEPENDS runtime/src/gfx/*.mm)
   file(GLOB MOD_GFX_SOURCES CONFIGURE_DEPENDS runtime/src/mods/*.mm)
+  if(WWHD_VISIONOS)
+    # the AppKit host (windows, menus, controls window, keyboard and mouse) is replaced by the visionOS host
+    list(FILTER METAL_SOURCES EXCLUDE REGEX "/(display|input|menu|controls_ui|overlay_appkit|text_input_appkit|quit_prompt|present_observer)\\.mm$")
+    list(FILTER MOD_GFX_SOURCES EXCLUDE REGEX "/mouse\\.mm$")
+    file(GLOB VISIONOS_HOST_SOURCES CONFIGURE_DEPENDS runtime/src/platform/visionos/*.mm runtime/src/platform/visionos/*.cpp)
+    list(APPEND METAL_SOURCES ${VISIONOS_HOST_SOURCES})
+  endif()
   list(APPEND GFX_SOURCES ${METAL_SOURCES})
   set_source_files_properties(${METAL_SOURCES} ${MOD_GFX_SOURCES} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
   # the settings overlay's Metal renderer (with guest HUD blend markers)
@@ -286,6 +302,9 @@ if(ANDROID)
   # Android: SDLActivity loads the game as libmain.so and calls its SDL_main (android/)
   add_library(wwhd SHARED ${RUNTIME_SOURCES} ${GX2_SOURCES} ${GFX_SOURCES} ${MOD_GFX_SOURCES} ${IMGUI_METAL})
   set_target_properties(wwhd PROPERTIES OUTPUT_NAME main)
+elseif(WWHD_VISIONOS)
+  # visionOS: the app (visionos/WindWakerVision) links this with gamecode, cemu_latte and imgui
+  add_library(wwhd STATIC ${RUNTIME_SOURCES} ${GX2_SOURCES} ${GFX_SOURCES} ${MOD_GFX_SOURCES} ${IMGUI_METAL})
 else()
   add_executable(wwhd ${RUNTIME_SOURCES} ${GX2_SOURCES} ${GFX_SOURCES} ${MOD_GFX_SOURCES} ${IMGUI_METAL})
 endif()
@@ -380,6 +399,16 @@ if(WWHD_SDL_HOST)
       target_link_libraries(wwhd PRIVATE ${LZ4_LIBRARY} ${CMAKE_DL_LIBS})
     endif()
   endif()
+endif()
+
+if(WWHD_VISIONOS)
+  target_compile_definitions(wwhd PRIVATE WWHD_VISIONOS=1)
+  # the visionOS SDK has no zstd or LZ4: the pinned sources, static
+  set(WWHD_BUNDLED_DEPS ON)
+  include(cmake/Zstd.cmake)
+  include(cmake/FullStateCodecs.cmake)
+  target_link_libraries(wwhd PRIVATE wwhd_state_codecs)
+  return()  # the tools and tests below are host programs
 endif()
 
 if(WWHD_HAS_METAL)

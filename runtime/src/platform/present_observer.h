@@ -1,6 +1,10 @@
 #pragma once
 #include <cstdint>
-#if defined(__APPLE__) && !defined(WWHD_SDL_HOST)
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+// visionOS: no observer (its AppKit implementation, gfx/present_observer.mm, is macOS only)
+#if defined(__APPLE__) && !defined(WWHD_SDL_HOST) && !TARGET_OS_VISION
 #ifdef __OBJC__
 @class CAMetalLayer;
 @class NSWindow;

@@ -11,7 +11,10 @@
 
 #if defined(__APPLE__) && !defined(WWHD_SDL_HOST)
 #include <AudioToolbox/AudioToolbox.h>
+#include <TargetConditionals.h>
+#if !TARGET_OS_VISION
 #include <CoreAudio/CoreAudio.h>
+#endif
 #else
 #include <SDL3/SDL.h>
 #endif
@@ -117,7 +120,7 @@ void pull(int16_t *out, uint32_t frames) {
     }
     g_read.store(r + n, std::memory_order_release);
 }
-#if defined(__APPLE__) && !defined(WWHD_SDL_HOST)
+#if defined(__APPLE__) && !defined(WWHD_SDL_HOST) && !TARGET_OS_VISION
 OSStatus output_changed(AudioObjectID, UInt32, const AudioObjectPropertyAddress *, void *) {
     // Six-channel game state cannot be switched to stereo mid-frame. Keep it silent until
     // restart renegotiates the new device, instead of letting the OS fold it into two speakers.
@@ -126,6 +129,8 @@ OSStatus output_changed(AudioObjectID, UInt32, const AudioObjectPropertyAddress 
     audio::flush();
     return noErr;
 }
+#endif
+#if defined(__APPLE__) && !defined(WWHD_SDL_HOST)
 OSStatus render(void *, AudioUnitRenderActionFlags *, const AudioTimeStamp *, UInt32, UInt32 frames,
                 AudioBufferList *io) {
     if (g_device_changed)
@@ -223,7 +228,11 @@ void init() {
 #if defined(__APPLE__) && !defined(WWHD_SDL_HOST)
         AudioComponentDescription desc{};
         desc.componentType = kAudioUnitType_Output;
+#if TARGET_OS_VISION
+        desc.componentSubType = kAudioUnitSubType_RemoteIO;  // the system's output (AVAudioSession)
+#else
         desc.componentSubType = kAudioUnitSubType_DefaultOutput;
+#endif
         desc.componentManufacturer = kAudioUnitManufacturer_Apple;
         AudioComponent comp = AudioComponentFindNext(nullptr, &desc);
         if (!comp || AudioComponentInstanceNew(comp, &g_unit) != noErr) {
@@ -234,6 +243,10 @@ void init() {
             open_dump();
             return;
         }
+#if TARGET_OS_VISION
+        if (g_channels == 6)
+            fallback();  // stereo: the system spatializes it
+#else
         if (g_channels == 6) {
             AudioDeviceID device = 0;
             UInt32 size = sizeof(device);
@@ -257,6 +270,7 @@ void init() {
             if (count < 6)
                 fallback();
         }
+#endif
         AudioStreamBasicDescription fmt{};
         fmt.mSampleRate = kRate;
         fmt.mFormatID = kAudioFormatLinearPCM;
@@ -328,9 +342,11 @@ void init() {
             g_unit = nullptr;
             return;
         }
+#if !TARGET_OS_VISION
         AudioObjectPropertyAddress changed{kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal,
                                            kAudioObjectPropertyElementMain};
         AudioObjectAddPropertyListener(kAudioObjectSystemObject, &changed, output_changed, nullptr);
+#endif
         LOG("[audio] CoreAudio output started (48 kHz, %d channels)", g_channels.load());
 #else
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {

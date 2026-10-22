@@ -107,13 +107,25 @@ void fatal(const char* fmt, ...) {
 namespace mem {
 static std::atomic<uint32_t> g_runtime_top{kRuntimeStart};
 
+#ifdef __APPLE__
+// the guest address space, once; the visionOS app calls this first thing at launch, before the system
+// frameworks map anything there, and init() then finds it reserved
+int reserve() {
+    static kern_return_t kr = [] {
+        mach_vm_address_t addr = (mach_vm_address_t)PPC_MEM_BASE;
+        kern_return_t r = mach_vm_allocate(mach_task_self(), &addr, 0x100000000ull, VM_FLAGS_FIXED);
+        // null page guard: catches guest null-pointer accesses
+        if (r == KERN_SUCCESS) mprotect(PPC_MEM_BASE, 0x10000, PROT_NONE);
+        return r;
+    }();
+    return kr;
+}
+#endif
+
 void init() {
 #ifdef __APPLE__
-    mach_vm_address_t addr = (mach_vm_address_t)PPC_MEM_BASE;
-    kern_return_t kr = mach_vm_allocate(mach_task_self(), &addr, 0x100000000ull, VM_FLAGS_FIXED);
+    kern_return_t kr = reserve();
     if (kr != KERN_SUCCESS) fatal("cannot reserve guest address space at %p (kr=%d)", PPC_MEM_BASE, kr);
-    // null page guard: catches guest null-pointer accesses
-    mprotect(PPC_MEM_BASE, 0x10000, PROT_NONE);
 #elif defined(_WIN32)
     void* p = VirtualAlloc(PPC_MEM_BASE, 0x100000000ull, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH, PAGE_READWRITE);
     if(p != PPC_MEM_BASE) fatal("cannot reserve guest address space (error=%lu)",GetLastError());
