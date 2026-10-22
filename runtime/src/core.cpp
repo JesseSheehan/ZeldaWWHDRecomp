@@ -1,8 +1,16 @@
 #include "crash_memory.h"
 // Guest memory, RPX loading, function dispatch, logging and HLE registry.
 #ifdef __APPLE__
+#include <TargetConditionals.h>
 #include <mach/mach.h>
+#if TARGET_OS_VISION
+// <mach/mach_vm.h> is "#error mach_vm.h unsupported." in the visionOS SDKs, but libsystem_kernel
+// still exports these: declare them as the macOS header does
+extern "C" kern_return_t mach_vm_allocate(vm_map_t target, mach_vm_address_t* address, mach_vm_size_t size, int flags);
+extern "C" kern_return_t mach_vm_deallocate(vm_map_t target, mach_vm_address_t address, mach_vm_size_t size);
+#else
 #include <mach/mach_vm.h>
+#endif
 #include <mach-o/ldsyms.h>
 #endif
 #include "platform/host.h"

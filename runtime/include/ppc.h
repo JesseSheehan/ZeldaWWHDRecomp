@@ -12,7 +12,15 @@
 extern "C" {
 #endif
 
-#if defined(__ANDROID__) || (defined(__linux__) && defined(__aarch64__))
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
+#if defined(__APPLE__) && TARGET_OS_VISION
+/* visionOS keeps a kernel guard over 0xFC0000000-0x7000000000 and rejects addresses at or above
+   0x8000000000 (even with extended virtual addressing): the 4 GiB window fits right after the guard */
+#define PPC_MEM_BASE ((uint8_t*)0x7000000000ull)
+#elif defined(__ANDROID__) || (defined(__linux__) && defined(__aarch64__))
 /* arm64 Linux kernels (Android, Raspberry Pi OS and other 4K-page configurations) often have a 39-bit
    user address space (512 GiB), where 32 TiB is out of reach: stay well below it (64 GiB) */
 #define PPC_MEM_BASE ((uint8_t*)0x1000000000ull)
