@@ -44,3 +44,20 @@ headstart.bin
 
 # Release template is fetched from the pinned private repository.
 /tools/shadercache/template.bin
+# visionOS port: game images, keys, game-derived code and data never leave the machine
+*.wua
+*.rpl
+*.sav
+common.key
+otp.bin
+seeprom.bin
+/data/
+/gen/
+obj-xros/
+libgamecode.a
+*.a
+*.o
+*.dylib
+*.mobileprovision
+visionos/**/xcuserdata/
+visionos/**/project.xcworkspace/xcuserdata/
