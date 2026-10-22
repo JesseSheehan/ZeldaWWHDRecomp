@@ -860,12 +860,16 @@ void upload_surface(Surface* s) {
         bool is3D = s->tex.textureType == MTLTextureType3D;
         uint32_t layers = is3D ? 1 : (s->tex.textureType == MTLTextureTypeCube ? 6 : (uint32_t)s->tex.arrayLength);
         uint32_t perSlice = bw * bh * f.hostBytesPerBlock;
+        // the copy covers the level's real size: a compressed level whose size is not a multiple of the
+        // block size ends inside its last blocks (Metal's validation rejects the block-rounded size)
+        const NSUInteger mw = std::max<NSUInteger>(1, s->tex.width >> level), mh = std::max<NSUInteger>(1, s->tex.height >> level);
+        const NSUInteger cw = std::min<NSUInteger>(f.compressed ? bw * 4 : w, mw), ch = std::min<NSUInteger>(f.compressed ? bh * 4 : h, mh);
         for (uint32_t z = 0; z < (is3D ? 1 : std::min(slices, layers)); z++) {
             [blit copyFromBuffer:staging
                      sourceOffset:(NSUInteger)z * perSlice
                 sourceBytesPerRow:bw * f.hostBytesPerBlock
               sourceBytesPerImage:perSlice
-                       sourceSize:MTLSizeMake(f.compressed ? bw * 4 : w, f.compressed ? bh * 4 : h, is3D ? slices : 1)
+                       sourceSize:MTLSizeMake(cw, ch, is3D ? slices : 1)
                         toTexture:s->tex
                  destinationSlice:z
                  destinationLevel:level
