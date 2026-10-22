@@ -1,4 +1,9 @@
 // Exact CPU-write tracking for guest memory (see write_watch.h for the protocol and its race argument).
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#include <sys/sysctl.h>
+#include <unistd.h>
+#endif
 #include "write_watch.h"
 
 #include <algorithm>
@@ -121,9 +126,24 @@ bool page_range(uint32_t addr, uint32_t size, uint64_t& first, uint64_t& last) {
 
 }  // namespace
 
+#if defined(__APPLE__) && TARGET_OS_VISION
+// a debugger attached to the process (Xcode): each expected fault would make a round trip through it
+static bool debugger_attached() {
+    kinfo_proc info{};
+    size_t size = sizeof info;
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
+    return sysctl(mib, 4, &info, &size, nullptr, 0) == 0 && (info.kp_proc.p_flag & P_TRACED);
+}
+#endif
+
 bool init(uint8_t* base, uint64_t size) {
     static std::once_flag once;
     std::call_once(once, [&] {
+#if defined(__APPLE__) && TARGET_OS_VISION
+        // visionOS under Xcode: the faults pass through the debugger and take the game down to a crawl;
+        // the renderers keep their sampling fallback instead
+        if (debugger_attached()) return;  // mem::init logs that write tracking is unavailable
+#endif
         size_t ps = host::page_size();
         if (!ps || (ps & (ps - 1))) return;
         unsigned shift = 0;

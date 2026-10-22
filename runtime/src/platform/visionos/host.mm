@@ -423,11 +423,18 @@ void host_controller_values(float* v) {
 
 void init() {
     input_map::load_startup();
+    auto describe = [](GCController* c, const char* what) {
+        LOG("[input] controller %s: %s (%s), extended gamepad %s, face layout %d", what, c.vendorName.UTF8String ?: "?",
+            c.productCategory.UTF8String ?: "?", c.extendedGamepad ? "yes" : "no",
+            (int)input_map::apple_face_layout(c.productCategory.UTF8String, c.vendorName.UTF8String));
+    };
+    for (GCController* c in [GCController controllers]) describe(c, "present");
     [[NSNotificationCenter defaultCenter] addObserverForName:GCControllerDidConnectNotification object:nil queue:nil
-                                                  usingBlock:^(NSNotification* n) {
-        GCController* c = n.object;
-        LOG("[input] controller connected: %s", c.vendorName.UTF8String ?: "?");
-    }];
+                                                  usingBlock:^(NSNotification* n) { describe(n.object, "connected"); }];
+    [[NSNotificationCenter defaultCenter] addObserverForName:GCControllerDidDisconnectNotification object:nil queue:nil
+                                                  usingBlock:^(NSNotification* n) { describe(n.object, "disconnected"); }];
+    // debug: WWHD_LOG_BUTTONS=1 logs every change of the GamePad buttons the controllers produce
+    static const bool log_buttons = getenv("WWHD_LOG_BUTTONS") != nullptr;
     // GameController values are polled on the main thread
     [NSTimer scheduledTimerWithTimeInterval:1.0 / 240 repeats:YES block:^(NSTimer*) {
         float v[input_map::kPadCount], game[input_map::kPadCount];
@@ -435,6 +442,11 @@ void init() {
         gates.combine(devices_values(), overlay::captures() || overlay::shortcut_took_input(), v, game);
         input_map::consume_shortcut_buttons(input_map::current(), v, game);
         PadState s = input_map::controller_state(input_map::current(), game);
+        static uint32_t last_buttons = 0;
+        if (log_buttons && s.buttons != last_buttons) {
+            LOG("[input] buttons %04X (stick L %.2f %.2f, R %.2f %.2f)", s.buttons, s.lx, s.ly, s.rx, s.ry);
+            last_buttons = s.buttons;
+        }
         std::lock_guard<std::mutex> lk(g_mu);
         g_pad = s;
         std::copy(v, v + input_map::kPadCount, g_host_values);

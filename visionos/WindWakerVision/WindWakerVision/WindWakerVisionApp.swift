@@ -1,4 +1,5 @@
 import AVFoundation
+import GameController
 import SwiftUI
 
 @main
@@ -22,6 +23,17 @@ struct GameView: UIViewRepresentable {
 final class GameLayerView: UIView {
     override class var layerClass: AnyClass { CAMetalLayer.self }
     private static var started = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        // game controllers go to GameController.framework (the runtime polls them), not to UIKit, which
+        // would take A, B and the sticks for its own taps and navigation
+        let interaction = GCEventInteraction()
+        interaction.handledEventTypes = .gamepad
+        addInteraction(interaction)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()

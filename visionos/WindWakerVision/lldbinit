@@ -1,0 +1,4 @@
+# The runtime write-protects guest pages holding textures and takes the first write to each as "the
+# texture changed" (runtime/src/write_watch.h): those faults are expected, so let them reach its handler.
+settings set platform.plugin.darwin.ignored-exceptions EXC_BAD_ACCESS
+process handle -p true -s false -n false SIGBUS SIGSEGV

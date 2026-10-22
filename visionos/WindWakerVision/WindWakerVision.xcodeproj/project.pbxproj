@@ -166,6 +166,7 @@
 			OTHER_LDFLAGS = ("-Wl,-force_load,$(WWHD_RUNTIME_BUILD)/libwwhd.a", "-lgamecode", "-lcemu_latte", "-limgui", "-lwwhd_zstd_static", "-llz4", "-lz", "-lcompression", "-lc++", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "UIKit", "-framework", "ImageIO", "-framework", "UniformTypeIdentifiers", "-framework", "GameController", "-framework", "AudioToolbox", "-framework", "CoreGraphics");
 			DEAD_CODE_STRIPPING = NO;
 			ENABLE_DEBUG_DYLIB = NO;
+			INFOPLIST_FILE = Info.plist;
 			ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 7;
@@ -193,6 +194,7 @@
 			OTHER_LDFLAGS = ("-Wl,-force_load,$(WWHD_RUNTIME_BUILD)/libwwhd.a", "-lgamecode", "-lcemu_latte", "-limgui", "-lwwhd_zstd_static", "-llz4", "-lz", "-lcompression", "-lc++", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "UIKit", "-framework", "ImageIO", "-framework", "UniformTypeIdentifiers", "-framework", "GameController", "-framework", "AudioToolbox", "-framework", "CoreGraphics");
 			DEAD_CODE_STRIPPING = NO;
 			ENABLE_DEBUG_DYLIB = NO;
+			INFOPLIST_FILE = Info.plist;
 			ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 7;
