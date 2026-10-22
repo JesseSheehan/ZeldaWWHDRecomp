@@ -6,10 +6,15 @@
 //   wwhd_visionos_set_layer(layer)  the CAMetalLayer of its view, which the TV picture is presented to
 //   wwhd_runtime_main(argc, argv)   main.cpp's start-up; returns once the game threads run
 //   wwhd_visionos_set_drawable_size(w, h, scale) whenever the view's size changes
+// and for the GamePad window (any time; it may open before or after the runtime starts, and close):
+//   wwhd_visionos_set_drc_layer(layer or NULL), wwhd_visionos_set_drc_drawable_size(w, h, scale),
+//   wwhd_visionos_drc_touch(down, x, y, w, h)  a pinch / touch on it (view points)
+//   wwhd_visionos_toggle_settings()            the settings overlay (in the TV window) open / closed
 //
-// One window (the TV picture, the GamePad picture as picture-in-picture or alone), game controllers
-// through GameController.framework, settings in NSUserDefaults. No keyboard, mouse, menus or file
-// panels yet.
+// Two windows: the TV picture (with the settings overlay) and the GamePad screen. The GamePad screen
+// modes are the desktop's (display_modes.h); in window mode a closed GamePad window falls back to the
+// picture-in-picture. Game controllers through GameController.framework, settings in NSUserDefaults.
+// No keyboard, mouse or file panels yet.
 #import <GameController/GameController.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -42,10 +47,14 @@
 
 namespace gfx {
 extern Renderer R;
+void save_display_options();
+void save_graphics_options();
 }  // namespace gfx
 
 // ---------------------------------------------------------------- the app's calls
 static CAMetalLayer* g_layer;
+static std::mutex g_drc_mu;
+static CAMetalLayer* g_drc_layer;  // the GamePad window's layer; nil while that window is closed
 
 extern "C" int wwhd_visionos_reserve_memory() {
     const int kr = mem::reserve();
@@ -231,12 +240,83 @@ static void compose_tv(id<MTLTexture> target, const Layout& L) {
     [e endEncoding];
 }
 
+// the GamePad window's picture: the GamePad image fitted, with the game's GamePad HUD markers
+static void compose_drc(id<MTLTexture> target) {
+    MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    rp.colorAttachments[0].texture = target;
+    rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+    rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> e = [command_buffer() renderCommandEncoderWithDescriptor:rp];
+    Layout L = layout(target.width, target.height, nominal_w(R.drc), nominal_h(R.drc), 0, 0, false);
+    draw_image(e, target.pixelFormat, target.width, target.height, R.drc.tex, R.drc.srgb, L.tv, 1.0f, R.drc.dyn);
+    if (auto* draw = overlay::guesthud::gamepad_region(target.width, target.height, L.tv.x, L.tv.y, L.tv.w, L.tv.h, 1)) {
+        if (is_srgb(target.pixelFormat)) overlay::linearize_colors(draw, true);
+        ImGui_ImplMetal_NewFrame(rp);
+        ImGui_ImplMetal_RenderDrawData(draw, command_buffer(), e);
+    }
+    [e endEncoding];
+}
+
+// ---------------------------------------------------------------- saved options (as menu.mm and display.mm)
+static bool saved_float(const char* key, float& v) {
+    std::string s;
+    if (!host_setting(key, s) || s.empty()) return false;
+    v = strtof(s.c_str(), nullptr);
+    return true;
+}
+static void set_float(const char* key, double v) {
+    char b[32];
+    snprintf(b, sizeof b, "%g", v);
+    set_host_setting(key, b);
+}
+void save_display_options() {
+    set_host_setting("drcMode", kModeNames[display_saved_mode()]);
+    set_host_setting("pipAnchor", kAnchorNames[g_pip_anchor]);
+    set_float("pipSize", g_pip_size);
+    set_float("pipOpacity", g_pip_opacity);
+    set_host_setting("scaleFilter", kFilterNames[g_filter]);
+}
+static void load_display_options() {
+    std::string s;
+    g_mode = find_name(kModeNames, kDrcModeCount, host_setting("drcMode", s) ? s.c_str() : nullptr, kDrcWindow);
+    g_pip_anchor = pip_load_anchor(host_setting("pipAnchor", s) ? s.c_str() : nullptr, nullptr);
+    float v;
+    if (saved_float("pipSize", v)) g_pip_size = pip_clamp_size(v);
+    if (saved_float("pipOpacity", v)) g_pip_opacity = pip_clamp_opacity(v);
+    g_filter = find_name(kFilterNames, 3, host_setting("scaleFilter", s) ? s.c_str() : nullptr, kSmooth);
+    g_shown = true;
+    display_env_overrides();  // start-up overrides for tests (not saved)
+}
+// the Graphics options (menu.mm's prefs: the same keys)
+void save_graphics_options() {
+    set_float("resScale", render::res_scale());
+    set_float("aoMode", render::ao_mode());
+    set_float("aoHires", render::ao_hires());
+    set_float("aniso", render::aniso());
+    set_float("fxaa", render::fxaa());
+    set_float("bloomStrength", render::bloom_strength());
+    set_float("fps60", interp::mode());
+    set_float("interpFps", interp::fps());
+    set_float("fps60Paced", interp::paced_interpolation_at(60));
+}
+static void load_graphics_options() {
+    float v;
+    if (saved_float("resScale", v) && !getenv("WWHD_RES_SCALE")) render::set_res_scale(v);
+    if (saved_float("aoMode", v)) render::set_ao_mode((int)v);
+    if (saved_float("aoHires", v)) render::set_ao_hires(v != 0);
+    if (saved_float("aniso", v)) render::set_aniso(v != 0);
+    if (saved_float("fxaa", v)) render::set_fxaa(v != 0);
+    if (saved_float("bloomStrength", v)) render::set_bloom_strength(v);
+    if (saved_float("interpFps", v) && !getenv("WWHD_INTERP_FPS")) interp::set_fps((int)v);
+    if (saved_float("fps60", v) && !getenv("WWHD_INTERP") && !getenv("WWHD_TRUE60")) interp::set_mode((int)v);
+    if (saved_float("fps60Paced", v)) interp::load_paced_interpolation_at(60, v != 0);
+}
+
 // Metal renderer start-up (metal_main.mm): the app's layer, input, the presentation pipelines
 void display_init() {
     if (!g_layer) fatal("visionOS: no layer (wwhd_visionos_set_layer before wwhd_runtime_main)");
-    g_mode = kDrcPip;  // one window: the GamePad picture as picture-in-picture
-    g_shown = true;
-    display_env_overrides();
+    load_display_options();
     CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     g_layer.colorspace = cs;
     CGColorSpaceRelease(cs);
@@ -254,6 +334,7 @@ void display_init() {
     if (!g_lib) fatal("present shader: %s", err.localizedDescription.UTF8String);
     R.presentPipeline = pipeline(MTLPixelFormatBGRA8Unorm, false, false);
     R.presentPipelineSRGB = pipeline(MTLPixelFormatBGRA8Unorm_sRGB, false, false);
+    load_graphics_options();
     MTLSamplerDescriptor* sd = [MTLSamplerDescriptor new];
     sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear;
     sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
@@ -275,19 +356,35 @@ void present_screens() {
     L.scale = P.scale;
     if (overlay::guesthud::active()) overlay::guesthud::set_tv_region(P.tv.x, P.tv.y, P.tv.w, P.tv.h, !P.drc_only);
     g_overlay_draw = overlay::frame(P.dw, P.dh, overlay_metal_init);
-    if (!scr.layer || !scr.tex) return;
-    MTLPixelFormat want = scr.srgb ? MTLPixelFormatBGRA8Unorm_sRGB : MTLPixelFormatBGRA8Unorm;
-    if (scr.layer.pixelFormat != want) scr.layer.pixelFormat = want;
-    id<CAMetalDrawable> drawable = scr.visible ? [scr.layer nextDrawable] : nil;
-    if (!drawable) return;
-    static bool first = true;
-    if (first) {
-        first = false;
-        LOG("[visionos] first frame presented (frame %llu, picture %.0fx%.0f, drawable %.0fx%.0f)", (unsigned long long)R.frame,
-            nominal_w(R.tv), nominal_h(R.tv), ls.width, ls.height);
+    if (scr.layer && scr.tex) {
+        MTLPixelFormat want = scr.srgb ? MTLPixelFormatBGRA8Unorm_sRGB : MTLPixelFormatBGRA8Unorm;
+        if (scr.layer.pixelFormat != want) scr.layer.pixelFormat = want;
+        if (id<CAMetalDrawable> drawable = scr.visible ? [scr.layer nextDrawable] : nil) {
+            static bool first = true;
+            if (first) {
+                first = false;
+                LOG("[visionos] first frame presented (frame %llu, picture %.0fx%.0f, drawable %.0fx%.0f)", (unsigned long long)R.frame,
+                    nominal_w(R.tv), nominal_h(R.tv), ls.width, ls.height);
+            }
+            compose_tv(drawable.texture, L);
+            [command_buffer() presentDrawable:drawable];
+        }
     }
-    compose_tv(drawable.texture, L);
-    [command_buffer() presentDrawable:drawable];
+    // the GamePad window (window mode)
+    CAMetalLayer* drc;
+    {
+        std::lock_guard<std::mutex> lk(g_drc_mu);
+        drc = g_drc_layer;
+    }
+    if (P.drc_window && drc && R.drc.tex) {
+        if (!drc.device) drc.device = R.device;
+        MTLPixelFormat want = R.drc.srgb ? MTLPixelFormatBGRA8Unorm_sRGB : MTLPixelFormatBGRA8Unorm;
+        if (drc.pixelFormat != want) drc.pixelFormat = want;
+        if (id<CAMetalDrawable> drawable = [drc nextDrawable]) {
+            compose_drc(drawable.texture);
+            [command_buffer() presentDrawable:drawable];
+        }
+    }
 }
 
 }  // namespace gfx
@@ -301,26 +398,34 @@ void choose_game_source(bool, std::function<void(std::string)>) { LOG("[visionos
 bool get(const char* key, std::string& value) { return gfx::host_setting(key, value); }
 void set(const char* key, const std::string& value) { gfx::set_host_setting(key, value); }
 float res_scale() { return render::res_scale(); }
-void set_res_scale(float s) { render::set_res_scale(s); }
-void graphics_changed() {}
+void set_res_scale(float s) {
+    render::set_res_scale(s);
+    gfx::save_graphics_options();
+}
+void graphics_changed() { gfx::save_graphics_options(); }
 int scale_filter() { return gfx::g_filter; }
-void set_scale_filter(int f) { gfx::g_filter = std::clamp(f, 0, 2); }
+void set_scale_filter(int f) { gfx::g_filter = std::clamp(f, 0, 2); gfx::save_display_options(); }
 bool scale_filter_available() { return true; }
 bool fullscreen() { return true; }
 void set_fullscreen(bool) {}
 int drc_modes() { return gfx::kDrcModeCount; }
-bool drc_mode_offered(int m) { return m != gfx::kDrcWindow && m >= 0 && m < gfx::kDrcModeCount; }  // one window
+// window: the GamePad window (picture-in-picture while it is closed)
+bool drc_mode_offered(int m) { return m >= 0 && m < gfx::kDrcModeCount; }
 int drc_mode() { return gfx::g_mode; }
-void set_drc_mode(int m) { if (drc_mode_offered(m)) gfx::display_set_mode(m); }
-void save_pip_position() {}
+void set_drc_mode(int m) {
+    if (!drc_mode_offered(m)) return;
+    gfx::display_set_mode(m);
+    gfx::save_display_options();
+}
+void save_pip_position() { gfx::save_display_options(); }
 int pip_anchor() { return gfx::g_pip_anchor; }
-void set_pip_anchor(int c) { gfx::g_pip_anchor = std::clamp(c, 0, int(gfx::kPipCustom)); }
+void set_pip_anchor(int c) { gfx::g_pip_anchor = std::clamp(c, 0, int(gfx::kPipCustom)); gfx::save_display_options(); }
 float pip_size() { return gfx::g_pip_size; }
-void set_pip_size(float s) { gfx::g_pip_size = gfx::pip_clamp_size(s); }
+void set_pip_size(float s) { gfx::g_pip_size = gfx::pip_clamp_size(s); gfx::save_display_options(); }
 float pip_opacity() { return gfx::g_pip_opacity; }
-void set_pip_opacity(float o) { gfx::g_pip_opacity = gfx::pip_clamp_opacity(o); }
+void set_pip_opacity(float o) { gfx::g_pip_opacity = gfx::pip_clamp_opacity(o); gfx::save_display_options(); }
 bool drc_available() { return true; }
-bool drc_shown() { return gfx::drc_screen_shown(false); }
+bool drc_shown() { return gfx::drc_screen_shown(gfx::g_has_drc_window); }
 void show_drc(bool on) { gfx::display_show_drc(on); }
 void set_pro_controller(bool on) {
     input::set_pro_controller(on);
@@ -478,3 +583,40 @@ void prompt_text(const std::u16string& initial, int, std::function<void(bool ok,
 }
 
 }  // namespace input
+
+// ---------------------------------------------------------------- the GamePad window (the app's calls)
+extern "C" void wwhd_visionos_set_drc_layer(void* layer) {
+    CAMetalLayer* l = (__bridge CAMetalLayer*)layer;
+    if (l) {
+        CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        l.colorspace = cs;
+        CGColorSpaceRelease(cs);
+        l.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        l.framebufferOnly = YES;
+        l.maximumDrawableCount = 3;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_drc_mu);
+        g_drc_layer = l;
+    }
+    gfx::g_has_drc_window = l != nil;
+    LOG("[visionos] GamePad window %s", l ? "open" : "closed");
+}
+
+extern "C" void wwhd_visionos_set_drc_drawable_size(double w, double h, double scale) {
+    std::lock_guard<std::mutex> lk(g_drc_mu);
+    if (!g_drc_layer) return;
+    g_drc_layer.contentsScale = scale;
+    g_drc_layer.drawableSize = CGSizeMake(std::max(1.0, w * scale), std::max(1.0, h * scale));
+}
+
+// a touch at (x, y) in a w x h view (points): the GamePad picture is letterboxed to its aspect in it
+extern "C" void wwhd_visionos_drc_touch(int down, double x, double y, double w, double h) {
+    if (w <= 0 || h <= 0) return;
+    const double a = gfx::g_drc_aspect;
+    double x0 = 0, y0 = 0, pw = w, ph = h;
+    if (w / h > a) { x0 = (w - h * a) / 2; pw = h * a; } else { y0 = (h - w / a) / 2; ph = w / a; }
+    input::set_touch(down != 0, (float)std::clamp((x - x0) / pw, 0.0, 1.0), (float)std::clamp((y - y0) / ph, 0.0, 1.0));
+}
+
+extern "C" void wwhd_visionos_toggle_settings() { overlay::set_open(!overlay::is_open(), overlay::OpenReason::API); }

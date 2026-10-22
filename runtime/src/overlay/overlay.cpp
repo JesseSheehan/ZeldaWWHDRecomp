@@ -2626,6 +2626,9 @@ void poll_controller_shortcuts(const float* values) {
     static SettingsShortcut shortcut;
     bool selectModifier = false;
     for (const auto& b : m.shortcuts) if (b.hold == input_map::kPadOptions && b.button) selectModifier = true;
+    // Select itself bound to Settings (a press opens it): the binding above already did, the hold must not close it
+    if (m.shortcuts[input_map::kSettings].button == input_map::kPadOptions && m.shortcuts[input_map::kSettings].hold == input_map::kPadNone)
+        selectModifier = true;
     const auto action = shortcut.poll(now_s(), !g_capturing_keys.load() && !selectModifier && pad[input_map::kPadOptions] > 0.5f,
                                      false, is_open()); // Home is an ordinary, remappable Settings binding.
 

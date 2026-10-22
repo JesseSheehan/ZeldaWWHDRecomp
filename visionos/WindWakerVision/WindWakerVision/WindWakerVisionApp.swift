@@ -5,35 +5,82 @@ import SwiftUI
 @main
 struct WindWakerVisionApp: App {
     var body: some Scene {
-        WindowGroup {
-            GameView()
-                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        // the TV picture (and the settings overlay)
+        WindowGroup(id: "tv") {
+            TVWindow()
         }
         .defaultSize(width: 1280, height: 720)
+        .windowResizability(.contentSize)
+
+        // the Wii U GamePad's screen; while it is closed the TV window shows it as picture-in-picture
+        WindowGroup(id: "gamepad") {
+            GamePadWindow()
+        }
+        .defaultSize(width: 640, height: 360)
         .windowResizability(.contentSize)
     }
 }
 
-struct GameView: UIViewRepresentable {
-    func makeUIView(context: Context) -> GameLayerView { GameLayerView() }
-    func updateUIView(_ uiView: GameLayerView, context: Context) {}
+struct TVWindow: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        MetalLayerView { GameLayerView() }
+            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .onAppear { openWindow(id: "gamepad") }
+            .ornament(attachmentAnchor: .scene(.bottom)) {
+                HStack {
+                    Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
+                    Button { openWindow(id: "gamepad") } label: { Label("GamePad", systemImage: "gamecontroller") }
+                }
+                .labelStyle(.iconOnly)
+                .padding(8)
+                .glassBackgroundEffect()
+            }
+    }
 }
 
-/// A view backed by the CAMetalLayer the runtime presents the game to.
-final class GameLayerView: UIView {
+struct GamePadWindow: View {
+    var body: some View {
+        MetalLayerView { GamePadLayerView() }
+            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .ornament(attachmentAnchor: .scene(.bottom)) {
+                Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
+                    .labelStyle(.iconOnly)
+                    .padding(8)
+                    .glassBackgroundEffect()
+            }
+    }
+}
+
+struct MetalLayerView<V: UIView>: UIViewRepresentable {
+    let make: () -> V
+    init(_ make: @escaping () -> V) { self.make = make }
+    func makeUIView(context: Context) -> V { make() }
+    func updateUIView(_ uiView: V, context: Context) {}
+}
+
+/// A view backed by a CAMetalLayer whose game controller events go to GameController.framework (the
+/// runtime polls the controllers), not to UIKit, which would take A, B and the sticks for its own taps
+/// and navigation.
+class GameControllerLayerView: UIView {
     override class var layerClass: AnyClass { CAMetalLayer.self }
-    private static var started = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        // game controllers go to GameController.framework (the runtime polls them), not to UIKit, which
-        // would take A, B and the sticks for its own taps and navigation
         let interaction = GCEventInteraction()
         interaction.handledEventTypes = .gamepad
         addInteraction(interaction)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    var scale: Double { traitCollection.displayScale > 0 ? Double(traitCollection.displayScale) : 2 }
+}
+
+/// The TV picture: starts the runtime when it first appears.
+final class GameLayerView: GameControllerLayerView {
+    private static var started = false
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -51,8 +98,7 @@ final class GameLayerView: UIView {
     }
 
     private func updateDrawableSize() {
-        let scale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 2
-        wwhd_visionos_set_drawable_size(Double(bounds.width), Double(bounds.height), Double(scale))
+        wwhd_visionos_set_drawable_size(Double(bounds.width), Double(bounds.height), scale)
     }
 
     private static func startRuntime() {
@@ -73,4 +119,36 @@ final class GameLayerView: UIView {
         let result = wwhd_runtime_main(Int32(cargs.count), &cargs)
         print("[visionos] runtime start-up returned \(result)")
     }
+}
+
+/// The GamePad screen: a pinch or touch on it is a GamePad touch.
+final class GamePadLayerView: GameControllerLayerView {
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            wwhd_visionos_set_drc_layer(Unmanaged.passUnretained(layer).toOpaque())
+            updateDrawableSize()
+        } else {
+            wwhd_visionos_set_drc_layer(nil)  // closed: picture-in-picture in the TV window
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateDrawableSize()
+    }
+
+    private func updateDrawableSize() {
+        wwhd_visionos_set_drc_drawable_size(Double(bounds.width), Double(bounds.height), scale)
+    }
+
+    private func touch(_ touches: Set<UITouch>, down: Bool) {
+        guard let t = touches.first else { return }
+        let p = t.location(in: self)
+        wwhd_visionos_drc_touch(down ? 1 : 0, Double(p.x), Double(p.y), Double(bounds.width), Double(bounds.height))
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) { touch(touches, down: true) }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) { touch(touches, down: true) }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { touch(touches, down: false) }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { touch(touches, down: false) }
 }

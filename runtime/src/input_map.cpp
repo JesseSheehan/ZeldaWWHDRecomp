@@ -167,7 +167,12 @@ const char* reserved_key(int code) {
 // later is this one line ({kVK_Escape}, {}). With a captured mouse the first Esc only frees the mouse
 // (overlay::key).
 static const ShortcutInfo kShortcuts[kShortcutCount] = {
+#ifdef WWHD_VISIONOS
+    // Apple Vision Pro: the system keeps Home; Minus (Select), whose Off-TV Play switch has no use there, opens Settings
+    {"Settings", "Settings", "General", {kVK_Escape}, {kVK_F1}, kPadOptions},
+#else
     {"Settings", "Settings", "General", {kVK_Escape}, {kVK_F1}, kPadHome},
+#endif
     {"Fullscreen", "Full screen", "General",
 #if defined(__APPLE__) && !defined(WWHD_SDL_HOST)
      {kVK_ANSI_F, kModSuper}, {kVK_ANSI_F, kModCtrl | kModSuper}},
