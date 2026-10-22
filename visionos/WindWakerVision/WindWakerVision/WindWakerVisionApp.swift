@@ -12,31 +12,77 @@ struct WindWakerVisionApp: App {
         .defaultSize(width: 1280, height: 720)
         .windowResizability(.contentSize)
 
-        // the Wii U GamePad's screen; while it is closed the TV window shows it as picture-in-picture
-        WindowGroup(id: "gamepad") {
+        // the Wii U GamePad's screen; while it is closed the TV window shows it as picture-in-picture.
+        // One value, one window: opening it again brings the open one forward.
+        WindowGroup(id: "gamepad", for: String.self) { _ in
             GamePadWindow()
+        } defaultValue: {
+            GamePadWindowState.value
         }
         .defaultSize(width: 640, height: 360)
         .windowResizability(.contentSize)
     }
 }
 
+/// Whether the GamePad window is open (its view is in a window).
+@Observable final class GamePadWindowState {
+    static let shared = GamePadWindowState()
+    static let value = "gamepad"
+    var open = false
+}
+
 struct TVWindow: View {
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+    private let gamepad = GamePadWindowState.shared
 
     var body: some View {
         MetalLayerView { GameLayerView() }
             .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            .onAppear { openWindow(id: "gamepad") }
+            .onAppear {
+                openGamePad()
+                // Start (+) brings the GamePad window back: the game shows its menus there
+                StartButtonWatcher.shared.onPress = { [openWindow] in
+                    if !GamePadWindowState.shared.open { openWindow(id: "gamepad", value: GamePadWindowState.value) }
+                }
+            }
             .ornament(attachmentAnchor: .scene(.bottom)) {
                 HStack {
                     Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
-                    Button { openWindow(id: "gamepad") } label: { Label("GamePad", systemImage: "gamecontroller") }
+                    Button {
+                        if gamepad.open { dismissWindow(id: "gamepad", value: GamePadWindowState.value) } else { openGamePad() }
+                    } label: {
+                        Label(gamepad.open ? "Close GamePad screen" : "Open GamePad screen", systemImage: "gamecontroller")
+                    }
                 }
                 .labelStyle(.iconOnly)
                 .padding(8)
                 .glassBackgroundEffect()
             }
+    }
+}
+
+extension TVWindow {
+    private func openGamePad() { openWindow(id: "gamepad", value: GamePadWindowState.value) }
+}
+
+/// Calls onPress when Start (+, Menu) is pressed on any game controller. The runtime polls the controllers
+/// itself; this only watches the button.
+final class StartButtonWatcher {
+    static let shared = StartButtonWatcher()
+    var onPress: (() -> Void)?
+
+    private init() {
+        for c in GCController.controllers() { watch(c) }
+        NotificationCenter.default.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { [weak self] n in
+            if let c = n.object as? GCController { self?.watch(c) }
+        }
+    }
+
+    private func watch(_ c: GCController) {
+        c.extendedGamepad?.buttonMenu.pressedChangedHandler = { [weak self] _, _, pressed in
+            if pressed { DispatchQueue.main.async { self?.onPress?() } }
+        }
     }
 }
 
@@ -131,6 +177,7 @@ final class GamePadLayerView: GameControllerLayerView {
         } else {
             wwhd_visionos_set_drc_layer(nil)  // closed: picture-in-picture in the TV window
         }
+        GamePadWindowState.shared.open = window != nil
     }
 
     override func layoutSubviews() {
