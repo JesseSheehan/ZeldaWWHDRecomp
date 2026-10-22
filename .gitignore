@@ -61,3 +61,5 @@ libgamecode.a
 *.mobileprovision
 visionos/**/xcuserdata/
 visionos/**/project.xcworkspace/xcuserdata/
+build-visionos/
+xcuserdata/

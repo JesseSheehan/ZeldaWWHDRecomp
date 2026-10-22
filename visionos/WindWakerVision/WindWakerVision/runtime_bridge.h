@@ -12,6 +12,9 @@ void wwhd_visionos_set_drc_layer(void* layer);
 void wwhd_visionos_set_drc_drawable_size(double width, double height, double scale);
 void wwhd_visionos_drc_touch(int down, double x, double y, double width, double height);
 void wwhd_visionos_toggle_settings(void);
+// the version of the game the app was built for: "USA", "EU", ...; its title id (16 hex digits)
+const char* wwhd_visionos_build_name(void);
+const char* wwhd_visionos_build_title_id(void);
 #ifdef __cplusplus
 }
 #endif

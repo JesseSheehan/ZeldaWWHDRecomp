@@ -8,7 +8,7 @@
 
 /* Begin PBXFileReference section */
 		A10000000000000000000001 /* MemProbe.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MemProbe.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A10000000000000000000030 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Signing.xcconfig; path = ../Signing.xcconfig; sourceTree = "<group>"; };
+		A10000000000000000000030 /* Project.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Project.xcconfig; path = ../../../visionos/Project.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -33,7 +33,7 @@
 		A10000000000000000000004 = {
 			isa = PBXGroup;
 			children = (
-				A10000000000000000000030 /* Signing.xcconfig */,
+				A10000000000000000000030 /* Project.xcconfig */,
 				A10000000000000000000002 /* MemProbe */,
 				A10000000000000000000005 /* Products */,
 			);
@@ -122,7 +122,7 @@
 /* Begin XCBuildConfiguration section */
 		A10000000000000000000011 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = A10000000000000000000030 /* Signing.xcconfig */;
+			baseConfigurationReference = A10000000000000000000030 /* Project.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
@@ -138,7 +138,7 @@
 		};
 		A10000000000000000000012 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = A10000000000000000000030 /* Signing.xcconfig */;
+			baseConfigurationReference = A10000000000000000000030 /* Project.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
@@ -151,7 +151,7 @@
 		};
 		A10000000000000000000013 /* ExtendedVA */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = A10000000000000000000030 /* Signing.xcconfig */;
+			baseConfigurationReference = A10000000000000000000030 /* Project.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;

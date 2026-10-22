@@ -33,6 +33,7 @@
 #include "gfx/metal.h"
 #include "gfx/renderer.h"
 #include "gx2/gx2.h"
+#include "guest_addr.h"
 #include "input.h"
 #include "input_map.h"
 #include "interp.h"
@@ -620,3 +621,7 @@ extern "C" void wwhd_visionos_drc_touch(int down, double x, double y, double w, 
 }
 
 extern "C" void wwhd_visionos_toggle_settings() { overlay::set_open(!overlay::is_open(), overlay::OpenReason::API); }
+
+// which version of the game this app's recompiled code is (the app checks an imported game against it)
+extern "C" const char* wwhd_visionos_build_name() { return g_guest_build_name; }
+extern "C" const char* wwhd_visionos_build_title_id() { return g_guest_build_title_id; }

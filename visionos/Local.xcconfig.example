@@ -1,3 +1,6 @@
 // Copy to Local.xcconfig (ignored by git) and set your Apple development team ID
 // (Xcode > Settings > Accounts, or the Membership page on developer.apple.com).
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
+
+// Only if tools/visionos/build.sh used another --build-dir:
+// WWHD_RUNTIME_BUILD = /path/to/build-dir/runtime

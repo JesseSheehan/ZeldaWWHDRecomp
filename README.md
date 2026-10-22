@@ -784,6 +784,10 @@ and the macOS app does not drive controller rumble yet.
 
 ## Other platforms
 
+**Apple Vision Pro:** this fork's `visionos` branch builds the port as a visionOS app (the game window, the GamePad
+screen in a second window, a game controller and the settings menu). It needs your own copy of the game and a Mac
+with Xcode; see [docs/visionos.md](docs/visionos.md).
+
 **Nintendo Switch:** [SwitchWakerHD](https://github.com/centollOS/SwitchWakerHD) is a community port built on this
 project, by Pulpparty, depende3000, centollOS and contributors. Like this project, it needs your own copy of the game,
 and no builds containing game code are shared. It is a separate project, not tested or supported here: please report

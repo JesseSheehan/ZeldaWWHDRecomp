@@ -1,3 +1,0 @@
-// Code signing for the visionOS projects: the Apple development team stays out of the repository.
-// Copy Local.xcconfig.example to Local.xcconfig (ignored by git) and put your team ID there.
-#include? "Local.xcconfig"

@@ -35,8 +35,13 @@ struct TVWindow: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     private let gamepad = GamePadWindowState.shared
+    private let library = GameLibrary.shared
 
     var body: some View {
+        if library.state == .ready { game } else { ImportView().frame(minWidth: 960, minHeight: 540) }
+    }
+
+    private var game: some View {
         MetalLayerView { GameLayerView() }
             .aspectRatio(16.0 / 9.0, contentMode: .fit)
             .onAppear {
@@ -161,11 +166,7 @@ final class GameLayerView: GameControllerLayerView {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         FileManager.default.changeCurrentDirectoryPath(docs.path)
         try? FileManager.default.createDirectory(at: docs.appendingPathComponent("save"), withIntermediateDirectories: true)
-        let game = docs.appendingPathComponent("game")
-        guard FileManager.default.fileExists(atPath: game.appendingPathComponent("code/cking.rpx").path) else {
-            print("[visionos] no game data at \(game.path) (copy data/game there)")
-            return
-        }
+        let game = GameLibrary.shared.gameFolder  // checked by GameLibrary before this view exists
         let args = ["wwhd", "--game", game.path, "--save", docs.appendingPathComponent("save").path]
         var cargs = args.map { strdup($0) }
         let result = wwhd_runtime_main(Int32(cargs.count), &cargs)
