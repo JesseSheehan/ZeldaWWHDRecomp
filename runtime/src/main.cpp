@@ -346,7 +346,8 @@ static void start_log_file(bool error = false) {
     const char* overlay_trace = getenv("WWHD_OVERLAY_TRACE");
     const bool tracing_overlay = overlay_trace && !strcmp(overlay_trace,"1");
     const bool hasSaved = hostui::get("logFile", saved);
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(WWHD_VISIONOS)
+    // no terminal to read: the log file is on unless turned off (visionOS: Documents/captures/wwhd.log)
     const bool enabledBySetting = !hasSaved || saved != "0";
 #else
     const bool enabledBySetting = hasSaved && saved == "1";
