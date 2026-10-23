@@ -147,6 +147,10 @@ For a sharper picture at 60 fps: **Settings > Vision Pro > Sharper picture (Meta
 the picture to the window's (or Full Screen's) real pixels with Apple's MetalFX instead of plain filtering,
 for very little GPU time; it helps most at 1x to 1.5x. 1.25x (1600x900) sits between 1x and 1.5x, and
 Graphics > Dynamic resolution (down to 75 %) keeps 1.5x at 60 fps by lowering it only in busy scenes.
+On the 90 Hz display, 60 fps shows its frames for 2 and 1 refreshes in turn. Graphics > Frame rate offers
+45 fps (3 frames for every 2 game steps, each shown for 2 refreshes: even, and cheaper than 60) and 90 fps
+(2 in-between frames per step, each shown for 1 refresh: even, and the smoothest, but about 50 % more GPU
+than 60). The game logic keeps its 30 steps a second in every mode.
 With the performance overlay on, the log (`Documents/captures/wwhd.log`) gets its GPU and CPU averages
 every 300 frames (`[perf]` lines).
 

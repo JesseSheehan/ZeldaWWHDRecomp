@@ -14,7 +14,7 @@ void set_fps(int f);
 void toggle_fps(int f);     // frame interpolation at f on, or off if it is on at f (menus, the 6 key)
 const char* mode_name();    // "30 fps", "40 fps", "60 fps", "120 fps", "240 fps", "true 60"; "240 fps (120 shown)" when capped
 int output_fps();           // the rate frame interpolation draws: fps() capped to the display
-int frames_per_step();      // frames drawn per 30 Hz logic step: 1, 2, 4 or 8 (40 fps: at most 2; 4 per 3 steps)
+int frames_per_step();      // frames drawn per 30 Hz logic step: 1, 2, 3, 4 or 8 (40/45 fps: at most 2; 4 per 3 steps, 3 per 2)
 
 // "Keep game speed": in-between frames that do not fit are skipped instead of slowing the game down;
 // one setting for 40/60 fps and one for 120/240 fps

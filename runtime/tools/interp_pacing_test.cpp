@@ -111,7 +111,11 @@ static void test_cap() {
     CHECK(cap_fps(60, 30, true) == 60);     // never below 60
     CHECK(cap_fps(240, 0, true) == 240);    // unknown rate: as chosen
     CHECK(cap_fps(240, 60, false) == 240);  // no vsync (mailbox, immediate): as chosen
-    CHECK(cap_fps(100, 240, true) == 60);   // invalid choices round down
+    CHECK(cap_fps(100, 240, true) == 90);   // invalid choices round down
+    CHECK(cap_fps(90, 90, true) == 90);     // 90 fps on a 90 Hz display (Vision Pro): 3 frames a step
+    CHECK(cap_fps(90, 60, true) == 60);     // not on 60 Hz
+    CHECK(cap_fps(90, 120, true) == 90);
+    CHECK(cap_fps(45, 90, true) == 45 && cap_fps(45, 60, true) == 45);  // fractional: drawn on any display
 }
 
 static void test_plan_and_next() {
@@ -926,7 +930,13 @@ static void test_steps_40() {
     const auto ms = [](double v) { return [v](int) { return int64_t(v * 1e6); }; };
     const int64_t from = 3'000 * kMs;
     CHECK(valid_fps(40) == 40);
-    CHECK(valid_fps(50) == 40);
+    CHECK(valid_fps(50) == 45);
+    CHECK(valid_fps(44) == 40 && valid_fps(45) == 45 && valid_fps(90) == 90 && valid_fps(100) == 90);
+    CHECK(even_on_display(45, 90) && even_on_display(90, 90) && !even_on_display(45, 60) && !even_on_display(90, 120));
+    CHECK(is_fractional(40) && is_fractional(45) && !is_fractional(60) && !is_fractional(90));
+    CHECK(in_between_fractional(45, 0) == 1 && in_between_fractional(45, 1) == 0 && in_between_fractional(45, 2) == 1);
+    CHECK(in_between_fractional(40, 0) == 1 && in_between_fractional(40, 1) == 0 && in_between_fractional(40, 2) == 0);
+    CHECK(frame_fractional(45, 33366666) == 22244444 && frame_fractional(40, 33366666) == frame_40(33366666));
     CHECK(valid_fps(30) == 60);  // (below 40: 60, as before)
     CHECK(cap_fps(40, 60, true) == 40);   // drawn on any display
     CHECK(cap_fps(40, 120, true) == 40);
@@ -1056,6 +1066,8 @@ static void test_steps_40() {
     CHECK_NEAR(adapt_slow_fps(40), 33.33, 0.01);
     CHECK(adapt_slow_fps(40) < 39.0);  // a 40 fps game that keeps 39 frames/s is not slow
     CHECK(adapt_resume_ms(60) == 14.0 && adapt_resume_ms(40) == 21.0);
+    CHECK_NEAR(adapt_resume_ms(45), 18.67, 0.01);
+    CHECK_NEAR(adapt_slow_fps(45), 37.5, 0.01);
 }
 
 int main() {

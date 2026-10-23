@@ -832,7 +832,10 @@ void tab_graphics() {
     heading("Frame rate");
     int m = interp::mode(), f = interp::fps();
     if (radio("30 fps (original)", m == 0)) post_changed([] { interp::set_mode(0); });
-    for (int r : {40, 60, 120, 240}) {
+    // 45 and 90 fps where they look even (a 90 Hz display: Apple Vision Pro), or while chosen
+    const int display = interp::display_hz();
+    for (int r : {40, 45, 60, 90, 120, 240}) {
+        if ((r == 45 || r == 90) && !(m == 1 && f == r) && !(display > 0 && interp::pacing::even_on_display(r, display))) continue;
         ImGui::SameLine();
         char label[16];
         snprintf(label, sizeof label, "%d fps", r);
@@ -842,7 +845,9 @@ void tab_graphics() {
          "frames in between are drawn blended (1 in-between frame per step at 60 fps, 3 at 120 fps,\n"
          "7 at 240 fps). The display shows at most its refresh rate: higher choices draw that many.\n"
          "40 fps draws 4 frames for every 3 steps (1 in-between frame per 3 steps), for 40, 80 and\n"
-         "120 Hz screens (a Steam Deck set to 40 Hz or 80 Hz, phones with a 120 Hz panel).");
+         "120 Hz screens (a Steam Deck set to 40 Hz or 80 Hz, phones with a 120 Hz panel).\n"
+         "On a 90 Hz display (Apple Vision Pro) 45 and 90 fps show every frame equally long: 45 fps\n"
+         "(3 frames for every 2 steps) costs less than 60, 90 fps (2 in-between frames per step) is the smoothest.");
     if (radio("True 60 (experimental)", m == 2)) post_changed([] { interp::set_mode(2); });
     help("True 60 runs the game logic at 60 steps per second");
     // the display's refresh rate, and what the chosen rate draws on it (interp::output_fps)
@@ -852,6 +857,11 @@ void tab_graphics() {
             note("Your display: %d Hz. 40 fps needs a 40, 80 or 120 Hz screen: here each frame stays on\n"
                  "screen for 1 or 2 refreshes in turn (uneven motion). Choose 30 or 60 fps, or set the\n"
                  "screen to 40, 80 or 120 Hz.", hz);
+        else if (m == 1 && (f == 45 || f == 90) && !interp::pacing::even_on_display(f, hz))
+            note("Your display: %d Hz. %d fps is even on a 90 Hz screen: here each frame stays on screen for\n"
+                 "1 or 2 refreshes in turn (uneven motion).", hz, f);
+        else if (m == 1 && f == 60 && hz == 90)
+            note("Your display: 90 Hz. 60 fps shows frames for 2 and 1 refreshes in turn; 45 and 90 fps are even.");
         else if (m == 1 && out < f)
             note("Your display: %d Hz. %d fps needs a %d Hz display; %d fps are drawn (the display cannot show more).", hz, f, f, out);
         else if (m == 1 && f > hz + 2)

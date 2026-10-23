@@ -140,37 +140,44 @@ void set_display_hz(int hz) {
 void set_present_vsync(bool on) {
     if (g_present_vsync.exchange(on) != on) LOG("[interp] presentation %s the display's vsync", on ? "waits for" : "does not wait for");
 }
-// 40 fps frame interpolation runs (3 steps over 4 frames: pacing::is_fps40)
-bool fps40() { return interp_on() && pacing::is_fps40(output_fps()); }
-// in-between frames per logic step of the current mode (true 60: its one half pass; 40 fps: at most
-// one, in one step of three)
+// 40 or 45 fps frame interpolation runs: fewer than 2 frames a step (4 frames over 3 steps, 3 over 2:
+// pacing::is_fractional)
+bool fps40() { return interp_on() && pacing::is_fractional(output_fps()); }
+// in-between frames per logic step of the current mode (true 60: its one half pass; 40/45 fps: at most
+// one, in one step of three / two)
 int in_between() { return interp_on() ? (fps40() ? 1 : output_fps() / 30 - 1) : true60::enabled() ? 1 : 0; }
-// frames drawn per logic step: 1 (30 fps), 2 (60 fps, true 60), 4 (120 fps), 8 (240 fps); at 40 fps
-// the most a step has (2; 4 frames per 3 steps: frame_ns, vsync_granule_ticks)
+// frames drawn per logic step: 1 (30 fps), 2 (60 fps, true 60), 3 (90 fps), 4 (120 fps), 8 (240 fps);
+// at 40/45 fps the most a step has (2; 4 frames per 3 steps or 3 per 2: frame_ns, vsync_granule_ticks)
 int frames_per_step() { return in_between() + 1; }
 // the drawn frame interval: two 59.94 Hz vsyncs over the frames of a step (16.68 ms at 60 fps), 1.5
-// vsyncs at 40 fps (25.03 ms)
-int64_t frame_ns() { return fps40() ? pacing::frame_40(2 * 16'683'333LL) : 16'683'333LL * 2 / std::max(1, frames_per_step()); }
-// the virtual vsync's ticks (quarter 59.94 Hz vsyncs) per drawn frame: 4 (30/60 fps, true 60), 6 (40),
-// 2 (120), 1 (240)
-uint32_t vsync_granule_ticks() { return fps40() ? 6 : interp_on() ? uint32_t(8 / std::max(2, frames_per_step())) : 4; }
-static const char* fps_name(int f) { return f == 240 ? "240 fps" : f == 120 ? "120 fps" : f == 40 ? "40 fps" : "60 fps"; }
-// 40 fps looks even only on a 40, 80 or 120 Hz display (pacing::even_on_display); elsewhere the
-// frames are shown for 1 and 2 refreshes in turn. They are still drawn (the game logic is the same);
-// the log and the settings say so. Logged once per display rate while 40 fps is chosen.
+// vsyncs at 40 fps (25.03 ms), 4/3 at 45 fps (22.24 ms)
+int64_t frame_ns() {
+    return fps40() ? pacing::frame_fractional(output_fps(), 2 * 16'683'333LL) : 16'683'333LL * 2 / std::max(1, frames_per_step());
+}
+// the virtual vsync's ticks (twelfths of a 59.94 Hz vsync, gx2_core.cpp) per drawn frame: 12 (30/60 fps,
+// true 60), 18 (40), 16 (45), 8 (90), 6 (120), 3 (240)
+uint32_t vsync_granule_ticks() {
+    return fps40() ? (output_fps() == 45 ? 16 : 18) : interp_on() ? uint32_t(24 / std::max(2, frames_per_step())) : 12;
+}
+static const char* fps_name(int f) {
+    return f == 240 ? "240 fps" : f == 120 ? "120 fps" : f == 90 ? "90 fps" : f == 45 ? "45 fps" : f == 40 ? "40 fps" : "60 fps";
+}
+// 40 fps looks even only on a 40, 80 or 120 Hz display, 45 and 90 on 90 Hz (pacing::even_on_display);
+// elsewhere the frames are shown for 1 and 2 refreshes in turn. They are still drawn (the game logic is
+// the same); the log and the settings say so. Logged once per display rate while such a rate is chosen.
 static void note_display_40() {
     static int logged = -1;
-    const int hz = display_hz();
-    if (!interp_on() || !pacing::is_fps40(fps()) || hz <= 0 || pacing::even_on_display(40, hz)) return;
+    const int hz = display_hz(), f = fps();
+    if (!interp_on() || !(pacing::is_fractional(f) || f == 90) || hz <= 0 || pacing::even_on_display(f, hz)) return;
     if (logged == hz) return;
     logged = hz;
-    LOG("[interp] 40 fps needs a 40, 80 or 120 Hz display; this one runs at %d Hz, so the frames are shown unevenly "
-        "(for 1 and 2 refreshes in turn). 30 or 60 fps are even here.", hz);
+    LOG("[interp] %d fps needs a %s display; this one runs at %d Hz, so the frames are shown unevenly "
+        "(for 1 and 2 refreshes in turn). 30 or 60 fps are even here.", f, f == 40 ? "40, 80 or 120 Hz" : "90 Hz", hz);
 }
 void set_enabled(bool v) {
     if (v) true60::set_enabled(false);
     g_on = v;
-    LOG("[interp] frame interpolation %s", v ? (fps() == 240 ? "on (240 fps)" : fps() == 120 ? "on (120 fps)" : fps() == 40 ? "on (40 fps)" : "on (60 fps)") : "off");
+    LOG("[interp] frame interpolation %s%s%s", v ? "on (" : "off", v ? fps_name(fps()) : "", v ? ")" : "");
     note_display_40();
 }
 void set_fps(int f) {
@@ -200,7 +207,11 @@ void toggle_fps(int f) {
 const char* mode_name() {
     if (mode() != 1) return mode() == 2 ? "true 60" : "30 fps";
     const int f = fps(), out = output_fps();
-    if (out < f) return f == 240 ? (out == 120 ? "240 fps (120 shown)" : "240 fps (60 shown)") : "120 fps (60 shown)";
+    if (out < f) {
+        static char capped[32];
+        snprintf(capped, sizeof capped, "%d fps (%d shown)", f, out);
+        return capped;
+    }
     return fps_name(f);
 }
 
@@ -209,9 +220,9 @@ const char* mode_name() {
 // halved in those ticks, so every mode keeps the formula (and 30/60 fps their exact timing).
 uint32_t effective_swap_interval(uint32_t game) { return enabled() ? std::max<uint32_t>(1, game / 2) : game; }
 // a logic step on the virtual vsync, in ticks: the frames of a step at their swap interval (8 for the
-// game's swap interval of 2; at 40 fps 8 as well, not frames x granule)
+// game's swap interval of 2, 24 ticks; at 40/45 fps 24 as well, not frames x granule)
 uint64_t step_ticks(uint32_t game) {
-    return fps40() ? 8ull * effective_swap_interval(game) : uint64_t(frames_per_step()) * effective_swap_interval(game) * vsync_granule_ticks();
+    return fps40() ? 24ull * effective_swap_interval(game) : uint64_t(frames_per_step()) * effective_swap_interval(game) * vsync_granule_ticks();
 }
 
 namespace {
@@ -957,7 +968,7 @@ int64_t frame_interval_ns() {
     }
     if (!g_even_pacing) return 0;
     if (!enabled() || frames_per_step() < 2) return 0;
-    if (fps40()) return frame_ns();  // every frame 1.5 vsyncs apart, whatever the step's frames
+    if (fps40()) return frame_ns();  // every frame 1.5 (40 fps) or 4/3 (45 fps) vsyncs apart, whatever the step's frames
     return int64_t(kPacedStep.count()) / (std::max(1, g_step_n) + 1);
 }
 // debug: WWHD_TRACE_STEPS=file writes a line per paced logic pass at 120/240 fps: its start (steady
@@ -1069,7 +1080,7 @@ static uint64_t g_steps40 = 0;  // 40 fps steps without a step slot (one in thre
 // before it) is drawn once, as a record logic pass, and its slot's second frame stays empty
 static int plan_step_40() {
     int frames = gx2::step_frames();
-    if (frames <= 0) frames = 1 + pacing::in_between_40(g_steps40++);
+    if (frames <= 0) frames = 1 + pacing::in_between_fractional(output_fps(), g_steps40++);
     else g_steps40 = 0;
     const int n = std::clamp(frames - 1, 0, 1);
     g_step_capacity = n;

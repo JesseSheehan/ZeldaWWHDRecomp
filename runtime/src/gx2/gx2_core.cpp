@@ -801,11 +801,12 @@ using namespace gx2;
 // Display timing, modelled on the hardware: vsync ticks at 60 Hz on its own clock, and a requested
 // flip executes on the first vsync that is at least `swap interval` vsyncs after the previous flip.
 // Games pace themselves by waiting for vsync until their flips have executed.
-// 120/240 fps frame interpolation needs 4/8 flips per logic step: the virtual vsync then ticks 2/4
-// times per 59.94 Hz vsync, and 40 fps (4 flips per 3 steps) every 1.5 vsyncs. The clock counts
-// quarter vsyncs ("ticks"); a vsync at the current rate is a granule of ticks (interp::
-// vsync_granule_ticks: 4, 2, 1; 6 at 40 fps), and every vsync count below is in ticks, rounded to
-// granules, so at 30/60 fps (granule 4) the timing is the 59.94 Hz one exactly.
+// 90/120/240 fps frame interpolation needs 3/4/8 flips per logic step: the virtual vsync then ticks
+// 1.5/2/4 times per 59.94 Hz vsync, 40 fps (4 flips per 3 steps) every 1.5 vsyncs and 45 fps (3 flips
+// per 2 steps) every 4/3. The clock counts twelfths of a vsync ("ticks"), so that each of them is a
+// whole number of ticks: a vsync at the current rate is a granule of ticks (interp::
+// vsync_granule_ticks: 12, 8, 6, 3; 18 at 40 fps, 16 at 45), and every vsync count below is in ticks,
+// rounded to granules, so at 30/60 fps (granule 12) the timing is the 59.94 Hz one exactly.
 static uint64_t g_swap_count = 0, g_flip_count = 0;
 namespace gx2 { uint64_t flips_presented() { return __atomic_load_n(&g_flip_count, __ATOMIC_RELAXED); } }  // live fps in the title
 static uint32 g_swap_interval = 1;  // as set by the game (frame interpolation halves it)
@@ -813,7 +814,7 @@ namespace interp { uint32_t effective_swap_interval(uint32_t game); uint64_t log
 static std::mutex g_flip_mutex;
 static const auto g_vsync_epoch = std::chrono::steady_clock::now();
 static constexpr std::chrono::nanoseconds kVsyncPeriod(16683333);  // 59.94 Hz
-static constexpr uint64_t kTicksPerVsync = 4;
+static constexpr uint64_t kTicksPerVsync = 12;
 // a flip also waits for the GPU to finish that frame, as on hardware: the game reuses a frame's
 // buffers once its flip has executed
 // (at: when it was swapped; step: the first frame of a logic step, not an interpolation hold pass)
@@ -834,7 +835,7 @@ static int64_t vsync_clock_now() {  // ns since the epoch on the vsync's clock (
 static uint64_t vsync_index() {  // in ticks
     return kVsyncClock.index(vsync_clock_now(), g_vsync_shift.load(std::memory_order_relaxed));
 }
-static uint64_t vsync_granule() {  // ticks per vsync at the current rate: 4 (30/60 fps), 6 (40), 2 (120), 1 (240)
+static uint64_t vsync_granule() {  // ticks per vsync at the current rate: 12 (30/60 fps), 18 (40), 16 (45), 8 (90), 6 (120), 3 (240)
     return interp::vsync_granule_ticks();
 }
 static std::chrono::steady_clock::time_point tick_time(uint64_t tick) {

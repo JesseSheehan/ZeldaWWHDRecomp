@@ -5,7 +5,7 @@
 // A logic step S -> S+1 is drawn in n + 1 passes: the logic pass (phase 0) and hold passes 1..n.
 // Hold passes 1..n-1 are blended like the logic pass; hold pass n, the record pass, draws S+1
 // exactly and records it as the "before" of the next step's blended frames. n is the step's number
-// of in-between frames: fps / 30 - 1 at most (1 at 60 fps, 3 at 120, 7 at 240).
+// of in-between frames: fps / 30 - 1 at most (1 at 60 fps, 2 at 90, 3 at 120, 7 at 240).
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -53,9 +53,12 @@ inline float pass_fraction(int phase, int n, bool exact) {
     return phase < n ? float(phase + 1) / float(n + 1) : 1.0f;
 }
 
-// Frame rates frame interpolation offers: 40, 60, 120, 240 (anything else rounds down to one of
-// them; below 40, 60)
-inline int valid_fps(int f) { return f >= 240 ? 240 : f >= 120 ? 120 : f >= 60 ? 60 : f >= 40 ? 40 : 60; }
+// Frame rates frame interpolation offers: 40, 45, 60, 90, 120, 240 (anything else rounds down to one
+// of them; below 40, 60). 45 and 90 are for 90 Hz displays (Apple Vision Pro): each frame shows for 2
+// or 1 refreshes, evenly.
+inline int valid_fps(int f) {
+    return f >= 240 ? 240 : f >= 120 ? 120 : f >= 90 ? 90 : f >= 60 ? 60 : f >= 45 ? 45 : f >= 40 ? 40 : 60;
+}
 
 // 40 fps: 3 logic steps over 4 frames (a frame every 1.5 vsyncs of 59.94 Hz, 25.03 ms). In each
 // group of 3 steps one step gets an in-between frame (drawn halfway, as at 60 fps: its logic pass
@@ -68,6 +71,11 @@ inline bool is_fps40(int fps) { return fps == 40; }
 inline int in_between_40(uint64_t step) { return step % 3 == 0 ? 1 : 0; }
 // the drawn frame interval at 40 fps: 3/4 of a step (1.5 vsyncs), in the step's unit
 inline int64_t frame_40(int64_t step) { return step * 3 / 4; }
+// 45 fps works the same way with 2 logic steps over 3 frames (a frame every 4/3 vsyncs, 22.24 ms):
+// one step of two gets the in-between frame. Together "fractional" rates: fewer than 2 frames a step.
+inline bool is_fractional(int fps) { return fps == 40 || fps == 45; }
+inline int in_between_fractional(int fps, uint64_t step) { return fps == 45 ? (step % 2 == 0 ? 1 : 0) : in_between_40(step); }
+inline int64_t frame_fractional(int fps, int64_t step) { return fps == 45 ? step * 2 / 3 : frame_40(step); }
 // The display shows a frame rate evenly when its refresh rate is a whole multiple of it (40 fps on
 // 40, 80, 120 or 160 Hz; 60 fps on 60, 120, 240 Hz). hz 0: unknown (taken as even). Rounded rates
 // count (119.88 Hz, 59.94 Hz).
@@ -85,7 +93,8 @@ inline bool even_on_display(int fps, int hz) {
 inline int cap_fps(int fps, int hz, bool vsync) {
     fps = valid_fps(fps);
     if (!vsync || hz <= 0) return fps;
-    if (is_fps40(fps)) return fps;  // 40 fps is drawn on any display (even_on_display says if it looks even)
+    if (is_fractional(fps)) return fps;  // 40 / 45 fps are drawn on any display (even_on_display says if it looks even)
+    if (fps == 90) return hz >= 88 ? 90 : 60;  // 90 fps (3 frames a step) only where the display can show it
     const int shown = hz >= 238 ? 240 : hz >= 118 ? 120 : 60;  // (119.88 Hz and 239.76 Hz modes count)
     return std::min(fps, shown);
 }
@@ -240,10 +249,10 @@ inline int64_t keep_window(int64_t step, int64_t /*frame*/, bool one_frame) { re
 // interpolation pauses while fewer frames a second than this are drawn for 2 s (the game would run
 // slower). 50 for 60 fps and up (unchanged); 5/6 of the rate at 40 fps (33.3: at 50 a 40 fps game
 // would always pause).
-inline double adapt_slow_fps(int fps) { return is_fps40(fps) ? fps * 5.0 / 6.0 : 50.0; }
+inline double adapt_slow_fps(int fps) { return is_fractional(fps) ? fps * 5.0 / 6.0 : 50.0; }
 // and resumes when a 30 fps frame costs the render thread less than this (ms): room for the frames
 // of a step (two at 60 fps: 14 ms; 4/3 at 40 fps: 21 ms)
-inline double adapt_resume_ms(int fps) { return is_fps40(fps) ? 21.0 : 14.0; }
+inline double adapt_resume_ms(int fps) { return is_fractional(fps) ? 840.0 / fps : 14.0; }  // (45 fps: 18.7 ms)
 
 // Even frame delivery (on by default on Android; WWHD_INTERP_EVEN_PACING=0/1). The passes of a step
 // take different times: a logic pass runs the game, an in-between pass only draws. When the game thread is the bottleneck

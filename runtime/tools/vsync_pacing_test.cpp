@@ -185,7 +185,32 @@ static void test_step_slots() {
     CHECK(next_slot(slot, slot + 2 * step, step, tick) == slot + 2 * step + tick);  // two steps late: a new schedule
 }
 
+// The runtime's clock (gx2_core.cpp): twelfths of a vsync, so that every drawn rate is a whole number
+// of ticks. Over a run of steps each rate gets its frames per step: 60 fps 2, 90 fps 3, 120 fps 4,
+// 240 fps 8; 40 fps 4 per 3 steps (2, 1, 1); 45 fps 3 per 2 steps (2, 1).
+static void test_twelfth_ticks() {
+    const Clock c{16'683'333, 12};
+    const int64_t step = 2 * c.period;
+    struct Rate { int fps; uint64_t granule; int steps; int frames; };
+    for (const Rate& r : {Rate{60, 12, 1, 2}, Rate{90, 8, 1, 3}, Rate{120, 6, 1, 4}, Rate{240, 3, 1, 8}, Rate{40, 18, 3, 4},
+                          Rate{45, 16, 2, 3}}) {
+        for (int64_t start : {c.time(7, 0), c.time(1000, 0) + 123, c.time(123457, 0) + 5}) {  // (time 0 is the epoch: a special case of slot_tick)
+            int frames = 0, most = 0, least = 99;
+            for (int k = 0; k < r.steps * 30; k++) {
+                const int f = step_frames(c, start + k * step, step, 0, r.granule);
+                frames += f;
+                most = std::max(most, f);
+                least = std::min(least, f);
+            }
+            CHECK(frames == r.frames * 30);           // the rate's frames per group of steps, on average
+            CHECK(most - least <= 1 && least >= 1);   // never an empty step, never more than one frame apart
+        }
+        CHECK(int64_t(c.granule_ns(r.granule)) - step * r.steps / r.frames <= 1);  // the frame interval
+    }
+}
+
 int main() {
+    test_twelfth_ticks();
     test_flip_executed();
     test_step_slots();
     test_on_time();

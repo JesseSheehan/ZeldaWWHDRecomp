@@ -24,11 +24,11 @@
 
 namespace vsync_pacing {
 
-// The clock: ticks (quarter vsyncs) since the epoch, advanced by `shift` nanoseconds. Times are
+// The clock: ticks (perVsync of them a vsync) since the epoch, advanced by `shift` nanoseconds. Times are
 // nanoseconds since the epoch on the vsync's clock.
 struct Clock {
     int64_t period;      // one vsync (59.94 Hz: 16'683'333 ns)
-    uint64_t perVsync;   // ticks per vsync (4)
+    uint64_t perVsync;   // ticks per vsync (gx2_core.cpp: 12)
     uint64_t index(int64_t t, int64_t shift) const { return t + shift <= 0 ? 0 : uint64_t(t + shift) * perVsync / uint64_t(period); }
     // the time tick starts (the first time index() returns it)
     int64_t time(uint64_t tick, int64_t shift) const { return int64_t((tick * uint64_t(period) + perVsync - 1) / perVsync) - shift; }
