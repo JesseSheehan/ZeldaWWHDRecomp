@@ -41,6 +41,7 @@
 #include "gfx/display_modes.h"
 #include "gfx/metal.h"
 #include "gfx/renderer.h"
+#include "gfx/depth3d.h"
 #include "gfx/warm_progress.h"
 #include "gx2/gx2.h"
 #include "guest_addr.h"
@@ -189,6 +190,31 @@ fragment float4 present_fs(VOut in [[stage_in]], texture2d<float> tex [[texture(
     return float4(c, 1.0);
 }
 fragment float4 solid_fs(VOut in [[stage_in]], constant float4& color [[buffer(0)]]) { return color; }
+// depth-based 3D (gfx/depth3d.h): one eye's picture. Each pixel shows the picture `eye` (-1 left, +1 right)
+// half a disparity to the side, the disparity linear in the depth buffer (as 1 / distance is) around the
+// mean depth near the centre (at the screen's depth), up to `far` at infinity and `near` in front.
+// Where the final picture differs from the scene without the HUD (`scene`) the HUD is: kept in place.
+struct D3 { float far_; float near_; float eye; float hud; int scene; };
+fragment float4 depth3d_fs(VOut in [[stage_in]], texture2d<float> fin [[texture(0)]], texture2d<float> scene [[texture(1)]],
+                           depth2d<float> dep [[texture(2)]], sampler s [[sampler(0)]], constant D3& p [[buffer(0)]]) {
+    float2 uv = in.uv;
+    float zc = 0.0;
+    for (int i = 0; i < 9; i++) zc += dep.sample(s, float2(0.4 + 0.1 * float(i % 3), 0.45 + 0.1 * float(i / 3)));
+    zc = min(zc / 9.0, 0.9995);
+    float x = uv.x;
+    for (int it = 0; it < 3; it++) {
+        float z = dep.sample(s, float2(x, uv.y));
+        float d = (z - zc) / (1.0 - zc);
+        d = d >= 0.0 ? min(d, 1.0) * p.far_ : max(d * p.far_, -p.near_);
+        x = uv.x - p.eye * 0.5 * d;
+    }
+    float2 src = float2(x, uv.y);
+    if (p.scene == 0) return fin.sample(s, src);
+    float4 f0 = fin.sample(s, uv), s0 = scene.sample(s, uv);
+    if (distance(f0.rgb, s0.rgb) > p.hud) return f0;
+    float4 f1 = fin.sample(s, src), s1 = scene.sample(s, src);
+    return distance(f1.rgb, s1.rgb) > p.hud ? s1 : f1;
+}
 )";
 
 static id<MTLLibrary> g_lib;
@@ -354,6 +380,122 @@ static void compose_tv(id<MTLTexture> target, const Layout& L) {
     [e endEncoding];
 }
 
+// ---------------------------------------------------------------- depth-based 3D (gfx/depth3d.h)
+// In Full Screen with 3D on the screen texture is two pictures wide: the left eye's, then the right
+// eye's (its material shows each eye its half: StereoScreen.usda). The eyes come from the TV picture and
+// the scene's depth (metal_draw.mm); the GamePad picture and the settings overlay are drawn flat in both.
+bool depth3d_scene(__strong id<MTLTexture>& depth, __strong id<MTLTexture>& color);  // metal_draw.mm
+static id<MTLTexture> g_eye[2];
+
+static id<MTLRenderPipelineState> depth3d_pipeline(MTLPixelFormat fmt) {
+    static id<MTLRenderPipelineState> p;
+    static MTLPixelFormat made = MTLPixelFormatInvalid;
+    if (p && made == fmt) return p;
+    MTLRenderPipelineDescriptor* d = [MTLRenderPipelineDescriptor new];
+    d.vertexFunction = [g_lib newFunctionWithName:@"present_vs"];
+    d.fragmentFunction = [g_lib newFunctionWithName:@"depth3d_fs"];
+    d.colorAttachments[0].pixelFormat = fmt;
+    NSError* err = nil;
+    p = [R.device newRenderPipelineStateWithDescriptor:d error:&err];
+    if (!p) LOG("[3d] eye pipeline: %s", err.localizedDescription.UTF8String);
+    made = fmt;
+    return p;
+}
+
+// the two eye pictures of this frame (same size and format as the TV picture); false: no scene depth
+static bool make_eyes() {
+    id<MTLTexture> depth = nil, scene = nil;
+    id<MTLTexture> tv = R.tv.tex;
+    if (!tv || !depth3d_scene(depth, scene) || !depth) return false;
+    id<MTLRenderPipelineState> pipe = depth3d_pipeline(tv.pixelFormat);
+    if (!pipe) return false;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        LOG("[3d] eyes from %lux%lu (format %d), depth %lux%lu, scene without HUD %s", (unsigned long)tv.width,
+            (unsigned long)tv.height, (int)tv.pixelFormat, (unsigned long)depth.width, (unsigned long)depth.height,
+            scene ? (scene.pixelFormat == tv.pixelFormat ? "yes" : "yes (other format)") : "no");
+    }
+    const float strength = std::clamp(depth3d::strength.load(), 0.0f, 1.0f);
+    for (int e = 0; e < 2; e++) {
+        if (!g_eye[e] || g_eye[e].width != tv.width || g_eye[e].height != tv.height || g_eye[e].pixelFormat != tv.pixelFormat) {
+            MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:tv.pixelFormat width:tv.width
+                                                                                          height:tv.height mipmapped:NO];
+            td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            td.storageMode = MTLStorageModePrivate;
+            g_eye[e] = [R.device newTextureWithDescriptor:td];
+        }
+        MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+        rp.colorAttachments[0].texture = g_eye[e];
+        rp.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> enc = [command_buffer() renderCommandEncoderWithDescriptor:rp];
+        [enc setRenderPipelineState:pipe];
+        float rect[4] = {0, 0, 1, 1};
+        struct { float far_, near_, eye, hud; int scene; } p = {0.012f * strength, 0.006f * strength,
+                                                                 (e == 0 ? -1.0f : 1.0f) * (depth3d::swap.load() ? -1.0f : 1.0f), 0.03f,
+                                                                 scene && scene.pixelFormat == tv.pixelFormat ? 1 : 0};
+        [enc setVertexBytes:rect length:sizeof rect atIndex:0];
+        [enc setFragmentTexture:tv atIndex:0];
+        [enc setFragmentTexture:scene ? scene : tv atIndex:1];
+        [enc setFragmentTexture:depth atIndex:2];
+        [enc setFragmentSamplerState:R.linearClamp atIndex:0];
+        [enc setFragmentBytes:&p length:sizeof p atIndex:0];
+        [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        [enc endEncoding];
+    }
+    return true;
+}
+
+// an overlay draw list made for one half of the target, drawn into half `half` (0 left, 1 right) of it
+static void draw_imgui_half(ImDrawData* d, MTLRenderPassDescriptor* rp, id<MTLRenderCommandEncoder> e, int half) {
+    const ImVec2 pos = d->DisplayPos, size = d->DisplaySize;
+    d->DisplaySize.x = size.x * 2;
+    if (half) d->DisplayPos.x = pos.x - size.x;
+    ImGui_ImplMetal_NewFrame(rp);
+    ImGui_ImplMetal_RenderDrawData(d, command_buffer(), e);
+    d->DisplayPos = pos;
+    d->DisplaySize = size;
+}
+
+// the side-by-side Full Screen picture; L is laid out for one half
+static void compose_tv_sbs(id<MTLTexture> target, const Layout& L) {
+    const bool eyes = make_eyes();
+    MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    rp.colorAttachments[0].texture = target;
+    rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+    rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> e = [command_buffer() renderCommandEncoderWithDescriptor:rp];
+    const float dw = target.width, dh = target.height, half = dw / 2;
+    const MTLPixelFormat fmt = target.pixelFormat;
+    for (int i = 0; i < 2; i++) {
+        Box b = L.tv;
+        b.x += i * half;
+        draw_image(e, fmt, dw, dh, eyes ? g_eye[i] : R.tv.tex, R.tv.srgb, b, 1.0f, R.tv.dyn);
+    }
+    ImDrawData* hud = nullptr;
+    float op = 1;
+    if (L.pip_on && R.drc.tex) {
+        op = L.drc_only ? 1.0f : g_pip_opacity.load();
+        const float bw = std::max(1.0f, roundf(L.pip.w / 200.0f));
+        float frame[4] = {0, 0, 0, 0.6f * op};
+        for (int i = 0; i < 2; i++) {
+            draw_solid(e, fmt, dw, dh, {L.pip.x - bw + i * half, L.pip.y - bw, L.pip.w + 2 * bw, L.pip.h + 2 * bw}, frame);
+            draw_image(e, fmt, dw, dh, R.drc.tex, R.drc.srgb, {L.pip.x + i * half, L.pip.y, L.pip.w, L.pip.h}, op, R.drc.dyn);
+        }
+        if ((hud = overlay::guesthud::gamepad_region(half, dh, L.pip.x, L.pip.y, L.pip.w, L.pip.h, op)) && is_srgb(fmt))
+            overlay::linearize_colors(hud, true);
+    }
+    if (hud)
+        for (int i = 0; i < 2; i++) draw_imgui_half(hud, rp, e, i);
+    if (g_overlay_draw) {
+        if (is_srgb(fmt)) overlay::linearize_colors(g_overlay_draw);
+        for (int i = 0; i < 2; i++) draw_imgui_half(g_overlay_draw, rp, e, i);
+    }
+    [e endEncoding];
+}
+
 // the GamePad window's picture: the GamePad image fitted, with the game's GamePad HUD markers
 static void compose_drc(id<MTLTexture> target) {
     MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -414,6 +556,9 @@ void save_graphics_options() {
     set_float("interpFps", interp::fps());
     set_float("fps60Paced", interp::paced_interpolation_at(60));
     set_float("metalFX", g_metalfx.load());
+    set_float("depth3d", depth3d::enabled.load());
+    set_float("depth3dStrength", depth3d::strength.load());
+    set_float("depth3dSwap", depth3d::swap.load());
 }
 static void load_graphics_options() {
     float v;
@@ -427,6 +572,9 @@ static void load_graphics_options() {
     if (saved_float("fps60", v) && !getenv("WWHD_INTERP") && !getenv("WWHD_TRUE60")) interp::set_mode((int)v);
     if (saved_float("fps60Paced", v)) interp::load_paced_interpolation_at(60, v != 0);
     if (saved_float("metalFX", v)) g_metalfx = v != 0;
+    if (saved_float("depth3d", v)) depth3d::enabled = v != 0;
+    if (saved_float("depth3dStrength", v)) depth3d::strength = std::clamp(v, 0.0f, 1.0f);
+    if (saved_float("depth3dSwap", v)) depth3d::swap = v != 0;
 }
 
 // ---------------------------------------------------------------- pause and resume (app_pause.h)
@@ -510,7 +658,9 @@ void present_screens() {
     CGSize ls = last_size;
     int theater_w = 0, theater_h = 0;
     const bool theater = visionos::theater_size(theater_w, theater_h);
-    if (theater) ls = CGSizeMake(theater_w, theater_h);
+    // (3D: the texture holds both eyes side by side; the layout is one eye's)
+    const bool sbs = theater && depth3d::enabled.load() && theater_w >= 2 * theater_h;
+    if (theater) ls = CGSizeMake(sbs ? theater_w / 2 : theater_w, theater_h);
     static bool was_theater = false;
     if (theater != was_theater) {  // the overlay as large on the screen as in the window (720 points high there)
         was_theater = theater;
@@ -527,7 +677,7 @@ void present_screens() {
     if (overlay::guesthud::active()) overlay::guesthud::set_tv_region(P.tv.x, P.tv.y, P.tv.w, P.tv.h, !P.drc_only);
     g_overlay_draw = overlay::frame(P.dw, P.dh, overlay_metal_init);
     if (theater) {
-        visionos::theater_frame([&](id<MTLTexture> target) { compose_tv(target, L); }, command_buffer());
+        visionos::theater_frame([&](id<MTLTexture> target) { sbs ? compose_tv_sbs(target, L) : compose_tv(target, L); }, command_buffer());
     } else if (tv && scr.tex) {
         MTLPixelFormat want = scr.srgb ? MTLPixelFormatBGRA8Unorm_sRGB : MTLPixelFormatBGRA8Unorm;
         if (tv.pixelFormat != want) tv.pixelFormat = want;
@@ -820,3 +970,6 @@ extern "C" void wwhd_visionos_tv_picture_size(int* width, int* height) {
     *width = (int)gfx::nominal_w(gfx::R.tv);
     *height = (int)gfx::nominal_h(gfx::R.tv);
 }
+
+// 3D (gfx/depth3d.h) is on: Full Screen then sizes its texture for two eyes and uses the per-eye material
+extern "C" int wwhd_visionos_depth3d(void) { return depth3d::enabled.load() ? 1 : 0; }

@@ -114,6 +114,9 @@ game folder, and the other way round.
   the same with the controller, and pressing the Digital Crown leaves full screen too. The choices are
   remembered. (Apple's own environments, such as Mount Hood, take only video players: the
   game cannot dock into them.)
+- **3D** (Settings > Vision Pro > 3D, in Full Screen, experimental): each eye gets its own picture, made
+  from the game's depth, so the world has depth while the HUD and menus stay at the screen. Depth sets
+  how strong it is; Swap eyes if it looks inside out. Off, it costs nothing.
 - **Closed the game window?** The game keeps running in the GamePad window. Press **−** or **+** (that press
   only reopens the window: it doesn't open Settings or reach the game), or the TV button below the GamePad
   window.
@@ -195,6 +198,13 @@ it is reserved before `main()` so nothing else lands there first.
   `Library/Caches/wwhd` records which head start that was. Metal binary archives can't be made on the Mac
   ahead of time: the runtime generates its Metal shaders from the game's GPU code while it runs, so there is
   no shader library to compile offline, and visionOS's own shader cache plays that part after the first start.
+- **3D** (`runtime/src/gfx/depth3d.h`): the Metal renderer copies the scene's depth and colour at the
+  frame's first HUD (layout) draw onto a target of the scene's size (`metal_draw.mm depth3d_track`); the host
+  makes the two eye pictures from the TV picture with that depth (`depth3d_fs`: each pixel shifted by a
+  disparity linear in the depth buffer around the depth near the centre; where the picture differs from the
+  scene without the HUD, unshifted) and draws them side by side into the Full Screen texture, which the
+  screen's ShaderGraph material (`Resources/StereoScreen.usda`, RealityKit's Camera Index Switch) shows each
+  eye its half of. `WWHD_TEST_THEATER=stereo` checks the material with a test picture.
 - **Text**: `runtime/src/platform/visionos/text_input.mm`, the counterpart of `gfx/text_input_appkit.mm`.
 - **Full Screen**: `visionos/WindWakerVision/WindWakerVision/Theater.swift` (an immersive space, its
   screen and surroundings made of simple unlit shapes in code) and `runtime/src/platform/visionos/theater.mm`:

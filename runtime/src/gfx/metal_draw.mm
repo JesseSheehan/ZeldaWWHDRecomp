@@ -25,6 +25,8 @@ extern "C" uint64_t g_shader_state_gen;  // gx2_core.cpp: bumped by shader-relev
 #include "metal.h"
 #include "cloud_proto.h"
 #include "perf_metrics.h"
+#include "depth3d.h"
+#include "stereo.h"
 #include "runtime.h"
 #include "util/helpers/StringBuf.h"
 
@@ -1467,6 +1469,72 @@ static bool ensure_pass(Surface* const* colors, const uint32_t* colorSlices, Sur
     return R.enc != nil;
 }
 
+// ---------------------------------------------------------------- depth-based 3D (depth3d.h)
+// The scene's depth: the last depth target of a 3D draw (not a layout one) whose colour target has the
+// same size. At the first layout (HUD) draw of the frame onto a target of that size, its colour so far
+// (the scene without the HUD) and that depth are copied for the presentation's eye pictures.
+namespace {
+id<MTLTexture> g_d3_live_depth;  // this frame's scene depth (the renderer's own texture)
+uint64_t g_d3_scene_frame = ~0ull, g_d3_captured_frame = ~0ull;
+id<MTLTexture> g_d3_depth, g_d3_color;  // the copies
+
+id<MTLTexture> d3_copy_target(id<MTLTexture> like, id<MTLTexture> have) {
+    if (have && have.width == like.width && have.height == like.height && have.pixelFormat == like.pixelFormat) return have;
+    MTLTextureDescriptor* d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:like.pixelFormat width:like.width
+                                                                                 height:like.height mipmapped:NO];
+    d.usage = MTLTextureUsageShaderRead;
+    d.storageMode = MTLStorageModePrivate;
+    return [R.device newTextureWithDescriptor:d];
+}
+
+void depth3d_track(Surface* color, Surface* depth) {
+    if (!depth3d::enabled.load(std::memory_order_relaxed) || !color || !color->tex) return;
+    if (!stereo::layoutDrawDepth) {
+        if (depth && depth->tex && depth->width == color->width && depth->height == color->height && color->width >= 640 &&
+            depth->tex.textureType == MTLTextureType2D) {
+            g_d3_live_depth = depth->tex;
+            g_d3_scene_frame = R.frame;
+        }
+        return;
+    }
+    if (g_d3_captured_frame == R.frame || g_d3_scene_frame != R.frame || !g_d3_live_depth) return;
+    if (color->tex.textureType != MTLTextureType2D || color->tex.width != g_d3_live_depth.width ||
+        color->tex.height != g_d3_live_depth.height)
+        return;
+    end_encoder();
+    g_d3_depth = d3_copy_target(g_d3_live_depth, g_d3_depth);
+    g_d3_color = d3_copy_target(color->tex, g_d3_color);
+    id<MTLBlitCommandEncoder> b = [command_buffer() blitCommandEncoder];
+    [b copyFromTexture:g_d3_live_depth toTexture:g_d3_depth];
+    [b copyFromTexture:color->tex toTexture:g_d3_color];
+    [b endEncoding];
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        LOG("[3d] scene captured at its first HUD draw: %lux%lu, depth format %d, colour format %d", (unsigned long)g_d3_depth.width,
+            (unsigned long)g_d3_depth.height, (int)g_d3_depth.pixelFormat, (int)g_d3_color.pixelFormat);
+    }
+    g_d3_captured_frame = R.frame;
+}
+}  // namespace
+
+// the presentation (host): this frame's (or the last one's) scene depth and colour without the HUD; false: none
+bool depth3d_scene(__strong id<MTLTexture>& depth, __strong id<MTLTexture>& color) {
+    if (!depth3d::enabled.load(std::memory_order_relaxed)) return false;
+    if (g_d3_captured_frame != ~0ull && R.frame - g_d3_captured_frame <= 1) {
+        depth = g_d3_depth;
+        color = g_d3_color;
+        return depth && color;
+    }
+    // a frame without HUD draws: the live depth, and the final picture is the scene
+    if (g_d3_scene_frame != ~0ull && R.frame - g_d3_scene_frame <= 1 && g_d3_live_depth) {
+        depth = g_d3_live_depth;
+        color = nil;
+        return true;
+    }
+    return false;
+}
+
 // cloud prototype (metal_clouds.mm): opens a pass on colour target 0 of the registers (and their depth
 // buffer), when the sky-cloud hook finds no open pass
 bool open_target_pass(const uint32_t* regs) {
@@ -1968,6 +2036,7 @@ void draw(const uint32_t* regs, uint32_t prim, uint32_t count, uint32_t indexTyp
     // post effects, which would lose the islands and characters)
     if (!readsPicture && !colors[0] && depth && clouds_shadow_depth(depth)) readsPicture = true;
     if (readsPicture) clouds_shadows_now();
+    depth3d_track(colors[0], depth);
     if (!ensure_pass(colors, colorSlices, depth, depthSlice)) { g_skip[SK_PASS]++; return; }
     rprof::mark(rprof::kPass);
     if (cloud_proto::g_active_seq) clouds_mark_start(colors, colorSlices, depth, depthSlice, ensure_pass);

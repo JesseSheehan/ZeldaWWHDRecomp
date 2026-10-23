@@ -102,11 +102,13 @@ enum TheaterOutput {
     private static var queue: TextureResource.DrawableQueue?
     private static var pending: TextureResource.Drawable?
 
-    @MainActor static func start(on texture: TextureResource) throws {
+    /// `stereo`: 3D, both eyes side by side (twice as wide)
+    @MainActor static func start(on texture: TextureResource, stereo: Bool = false) throws {
         var w: Int32 = 0, h: Int32 = 0
         wwhd_visionos_tv_picture_size(&w, &h)
-        width = min(3840, max(2560, Int(w)))
-        height = width * 9 / 16
+        let eye = min(3840, max(2560, Int(w)))
+        height = eye * 9 / 16
+        width = stereo ? 2 * eye : eye
         let descriptor = TextureResource.DrawableQueue.Descriptor(pixelFormat: .bgra8Unorm_srgb, width: width, height: height,
                                                                   usage: [.renderTarget, .shaderRead], mipmapsMode: .none)
         let q = try TextureResource.DrawableQueue(descriptor)
@@ -141,6 +143,75 @@ enum TheaterOutput {
     }
 }
 
+/// The screen's picture in 2D or in 3D (Settings > Vision Pro > 3D): its texture and the screen's and the
+/// reflection's materials. In 3D the texture holds both eyes side by side and the screen's material
+/// (Resources/StereoScreen.usda) shows each eye its half; the reflection shows the left one. Follows the
+/// setting live (check, every frame: one flag read).
+@MainActor final class ScreenPicture {
+    private(set) var stereo = false
+    private(set) var reflectionScaleX: Float = 1
+    private var stereoLook: ShaderGraphMaterial?
+    private var loading = false
+    private let screen: Entity, reflection: Entity
+    private let pattern: Bool
+
+    init(screen: Entity, reflection: Entity, pattern: Bool) {
+        self.screen = screen
+        self.reflection = reflection
+        self.pattern = pattern
+        build(stereo: false)
+    }
+
+    func check() {
+        guard !pattern else { return }
+        let wanted = wwhd_visionos_depth3d() != 0
+        guard wanted != stereo else { return }
+        if wanted && stereoLook == nil {
+            if !loading {
+                loading = true
+                Task { @MainActor in
+                    self.stereoLook = try? await ShaderGraphMaterial(named: "/Root/StereoScreen", from: "StereoScreen.usda", in: .main)
+                    if self.stereoLook == nil { print("[visionos] 3D: the per-eye material did not load") }
+                    self.loading = false
+                }
+            }
+            return  // (again next frame, once it is loaded)
+        }
+        build(stereo: wanted)
+    }
+
+    private func build(stereo: Bool) {
+        if !pattern { TheaterOutput.stop() }
+        guard let texture = try? TextureResource(image: pattern ? TheaterSpace.colorBars() : TheaterSpace.solid(red: 0, green: 0, blue: 0),
+                                                 options: .init(semantic: .color)) else { return }
+        if !pattern { try? TheaterOutput.start(on: texture, stereo: stereo) }
+        var look: any RealityKit.Material
+        if stereo, var m = stereoLook, (try? m.setParameter(name: "Picture", value: .textureResource(texture))) != nil {
+            look = m
+        } else {
+            var m = UnlitMaterial(applyPostProcessToneMap: false)
+            m.color = .init(tint: .white, texture: .init(texture))
+            look = m
+        }
+        if var model = screen.components[ModelComponent.self] {
+            model.materials = [look]
+            screen.components.set(model)
+        } else {
+            screen.components.set(ModelComponent(mesh: .generatePlane(width: 1, height: 1), materials: [look]))
+        }
+        for mirror in reflection.children {
+            guard var model = mirror.components[ModelComponent.self] else { continue }
+            model.materials = [TheaterSpace.reflectionMaterial(texture)]
+            mirror.components.set(model)
+        }
+        if reflection.children.isEmpty {
+            reflection.addChild(ModelEntity(mesh: .generatePlane(width: 1, height: 1), materials: [TheaterSpace.reflectionMaterial(texture)]))
+        }
+        reflectionScaleX = stereo ? 0.5 : 1
+        self.stereo = stereo
+    }
+}
+
 /// The immersive space: the screen, the controls under it, and the sky, sea and clouds.
 struct TheaterSpace: View {
     @Environment(\.openWindow) private var openWindow
@@ -158,6 +229,7 @@ struct TheaterSpace: View {
     /// What moves each frame: the game's scenery (GameScenery) and the reflection's ripple.
     final class Animation {
         var scenery: (Double) -> Void = { _ in }
+        var picture: ScreenPicture?
         let start = Date()
     }
 
@@ -165,23 +237,16 @@ struct TheaterSpace: View {
         RealityView { content, attachments in
             // test switch: WWHD_TEST_THEATER=pattern shows colour bars instead of the game (simulator)
             let pattern = ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"] == "pattern"
-            let texture = try? TextureResource(image: pattern ? Self.colorBars() : Self.solid(red: 0, green: 0, blue: 0),
-                                               options: .init(semantic: .color))
-            var material = UnlitMaterial(applyPostProcessToneMap: false)
-            if let texture {
-                material.color = .init(tint: .white, texture: .init(texture))
-                if !pattern { try? TheaterOutput.start(on: texture) }
-            }
-            screen.components.set(ModelComponent(mesh: Self.screenMesh(theater.size, onSea: theater.surroundings == .sky), materials: [material]))
+            screen.components.set(ModelComponent(mesh: Self.screenMesh(theater.size, onSea: theater.surroundings == .sky), materials: []))
             content.add(screen)
-            if ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"] == "stereo" { Self.testStereoMaterial(on: screen) }
             world = Self.makeWorld()
             content.add(world)
             // the screen's reflection in the sea: the same texture (no copy), darker, fading with depth
-            if let texture {
-                reflection.addChild(ModelEntity(mesh: Self.reflectionMesh(theater.size), materials: [Self.reflectionMaterial(texture)]))
-                world.addChild(reflection)
-            }
+            reflection.addChild(ModelEntity(mesh: Self.reflectionMesh(theater.size), materials: []))
+            world.addChild(reflection)
+            // the picture on both, 2D or 3D (ScreenPicture)
+            animation.picture = ScreenPicture(screen: screen, reflection: reflection, pattern: pattern)
+            if ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"] == "stereo" { Self.testStereoMaterial(on: screen) }
             // the game's own waves, clouds and sun, from the game folder (GameScenery), once decoded
             let animation = animation, world = world, folder = GameLibrary.shared.gameFolder.path
             Task.detached(priority: .utility) {
@@ -193,10 +258,13 @@ struct TheaterSpace: View {
                 let t = Date().timeIntervalSince(animation.start)
                 animation.scenery(t)
                 sky.update()
-                // the reflection sways a little, as on moving water
+                animation.picture?.check()
+                // the reflection sways a little, as on moving water (in 3D it shows the left eye's half)
+                let scaleX = animation.picture?.reflectionScaleX ?? 1
                 for strip in reflection.children {
                     guard var model = strip.components[ModelComponent.self], var m = model.materials.first as? UnlitMaterial else { continue }
-                    m.textureCoordinateTransform = .init(offset: [Float(sin(t * 1.7)) * 0.004, Float(sin(t * 1.1)) * 0.006])
+                    m.textureCoordinateTransform = .init(offset: [Float(sin(t * 1.7)) * 0.004, Float(sin(t * 1.1)) * 0.006],
+                                                         scale: [scaleX, 1])
                     model.materials = [m]
                     strip.components.set(model)
                 }

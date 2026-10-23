@@ -14,6 +14,7 @@
 #include <functional>
 #include <mutex>
 
+#include "gfx/depth3d.h"
 #include "guest_addr.h"
 #include "imgui.h"
 #include "overlay/extensions.h"
@@ -86,6 +87,28 @@ static void draw_tab() {
                  gfx::g_metalfx_out_h.load());
         else
             note("Waiting: the picture is not enlarged right now (the window shows it at its size or smaller).");
+    }
+    ImGui::SeparatorText("3D");
+    bool on3d = false;
+    if (check("3D (in Full Screen)", depth3d::enabled.load(), &on3d))
+        hostui::post([on3d] {
+            depth3d::enabled = on3d;
+            gfx::save_graphics_options();
+        });
+    note("Each eye gets its own picture, made from the game's depth: the world gets depth, the HUD and menus "
+         "stay at the screen. Shows in Full Screen. Off: no cost.");
+    if (depth3d::enabled.load()) {
+        float strength = depth3d::strength.load();
+        if (ImGui::SliderFloat("Depth", &strength, 0.05f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+            depth3d::strength = strength;
+            hostui::post([] { gfx::save_graphics_options(); });
+        }
+        bool swapped = false;
+        if (check("Swap eyes", depth3d::swap.load(), &swapped))
+            hostui::post([swapped] {
+                depth3d::swap = swapped;
+                gfx::save_graphics_options();
+            });
     }
     ImGui::SeparatorText("Full Screen");
     note("The game on a big screen in front of you: over the sea under a bright sky (the picture reflects in "
