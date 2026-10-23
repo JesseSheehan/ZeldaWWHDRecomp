@@ -196,7 +196,9 @@ fragment float4 solid_fs(VOut in [[stage_in]], constant float4& color [[buffer(0
 // `far` at infinity: everything sits at or behind the screen, nothing comes out of it. The depth is read
 // without filtering and widened by a pixel toward the nearer side, so an outline stays with its object; a
 // pixel that the shift uncovers takes the farther (background) side. Where the final picture differs from
-// the scene without the HUD (`scene`) the HUD is: kept in place.
+// the scene without the HUD (`scene`), or does a little way around, the HUD is: kept in place, as is
+// everything when an overlay covers most of the picture (a fade, a full-screen menu: zc[2]); a shifted
+// pixel never takes the scene without the HUD (in a fade that is the scene before it darkened).
 struct D3 { float far_; float eye; float hud; int scene; float texel; };
 static float d3_depth(depth2d<float> dep, float2 uv, float texel) {
     constexpr sampler pt(coord::normalized, filter::nearest, address::clamp_to_edge);
@@ -206,7 +208,11 @@ static float d3_depth(depth2d<float> dep, float2 uv, float texel) {
     return z;
 }
 static float d3_disparity(float z, float zc, float far_) { return clamp((z - zc) / max(1.0 - zc, 1e-4), 0.0, 1.0) * far_; }
-kernel void depth3d_focus(depth2d<float> dep [[texture(0)]], device float* zc [[buffer(0)]], uint id [[thread_position_in_grid]]) {
+// zc[0]: the focus depth (smoothed); zc[2]: how much of the picture an overlay covers (a fade to black, a
+// full-screen menu: the share of a 7 x 7 grid where the picture differs from the scene without the HUD)
+kernel void depth3d_focus(depth2d<float> dep [[texture(0)]], texture2d<float> fin [[texture(1)]], texture2d<float> scene [[texture(2)]],
+                          device float* zc [[buffer(0)]], constant float& hud [[buffer(1)]], constant int& hasScene [[buffer(2)]],
+                          uint id [[thread_position_in_grid]]) {
     if (id != 0) return;
     constexpr sampler pt(coord::normalized, filter::nearest, address::clamp_to_edge);
     float m = 1.0;
@@ -214,21 +220,37 @@ kernel void depth3d_focus(depth2d<float> dep [[texture(0)]], device float* zc [[
     m = min(m, 0.9995);
     zc[0] = zc[1] == 0.0 ? m : mix(zc[0], m, 0.05);  // (zc[1]: set once there is a value)
     zc[1] = 1.0;
+    float covered = 0.0;
+    if (hasScene != 0)
+        for (int i = 0; i < 49; i++) {
+            const float2 q = float2(0.1 + float(i % 7) * 0.8 / 6.0, 0.1 + float(i / 7) * 0.8 / 6.0);
+            covered += distance(fin.sample(pt, q).rgb, scene.sample(pt, q).rgb) > hud ? 1.0 : 0.0;
+        }
+    zc[2] = covered / 49.0;
 }
 fragment float4 depth3d_fs(VOut in [[stage_in]], texture2d<float> fin [[texture(0)]], texture2d<float> scene [[texture(1)]],
                            depth2d<float> dep [[texture(2)]], sampler s [[sampler(0)]], constant D3& p [[buffer(0)]],
                            device const float* zc [[buffer(1)]]) {
     float2 uv = in.uv;
+    float4 f0 = fin.sample(s, uv);
+    if (p.scene != 0) {
+        if (zc[2] > 0.3) return f0;
+        const float2 t = float2(2.0 * p.texel, 2.0 * p.texel * float(fin.get_width()) / float(fin.get_height()));
+        float h = distance(f0.rgb, scene.sample(s, uv).rgb);
+        h = max(h, distance(fin.sample(s, uv + float2(t.x, 0)).rgb, scene.sample(s, uv + float2(t.x, 0)).rgb));
+        h = max(h, distance(fin.sample(s, uv - float2(t.x, 0)).rgb, scene.sample(s, uv - float2(t.x, 0)).rgb));
+        h = max(h, distance(fin.sample(s, uv + float2(0, t.y)).rgb, scene.sample(s, uv + float2(0, t.y)).rgb));
+        h = max(h, distance(fin.sample(s, uv - float2(0, t.y)).rgb, scene.sample(s, uv - float2(0, t.y)).rgb));
+        if (h > p.hud) return f0;
+    }
     float x = uv.x;
     for (int it = 0; it < 4; it++) x = uv.x - p.eye * 0.5 * d3_disparity(d3_depth(dep, float2(x, uv.y), p.texel), zc[0], p.far_);
     // uncovered background: of the source and a pixel further toward the eye's side, the farther one
     float2 src = float2(x, uv.y), side = float2(x - p.eye * 2.0 * p.texel, uv.y);
     if (d3_depth(dep, side, p.texel) > d3_depth(dep, src, p.texel) + 0.0005) src = side;
-    if (p.scene == 0) return fin.sample(s, src);
-    float4 f0 = fin.sample(s, uv), s0 = scene.sample(s, uv);
-    if (distance(f0.rgb, s0.rgb) > p.hud) return f0;
-    float4 f1 = fin.sample(s, src), s1 = scene.sample(s, src);
-    return distance(f1.rgb, s1.rgb) > p.hud ? s1 : f1;
+    float4 f1 = fin.sample(s, src);
+    if (p.scene == 0) return f1;
+    return distance(f1.rgb, scene.sample(s, src).rgb) > p.hud ? f0 : f1;
 }
 )";
 
@@ -444,8 +466,14 @@ static bool make_eyes() {
     if (!focus) return false;
     id<MTLComputeCommandEncoder> ce = [command_buffer() computeCommandEncoder];
     [ce setComputePipelineState:focus];
+    const float hudDiff = 0.05f;
+    const int hasScene = scene && scene.pixelFormat == tv.pixelFormat ? 1 : 0;
     [ce setTexture:depth atIndex:0];
+    [ce setTexture:tv atIndex:1];
+    [ce setTexture:scene ? scene : tv atIndex:2];
     [ce setBuffer:zc offset:0 atIndex:0];
+    [ce setBytes:&hudDiff length:sizeof hudDiff atIndex:1];
+    [ce setBytes:&hasScene length:sizeof hasScene atIndex:2];
     [ce dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
     [ce endEncoding];
     const float strength = std::clamp(depth3d::strength.load(), 0.0f, 1.0f);
@@ -466,7 +494,7 @@ static bool make_eyes() {
         float rect[4] = {0, 0, 1, 1};
         // at most 0.8 % of the width between the eyes at infinity (Depth 1)
         struct { float far_, eye, hud; int scene; float texel; } p = {0.008f * strength,
-                                                                      (e == 0 ? -1.0f : 1.0f) * (depth3d::swap.load() ? -1.0f : 1.0f), 0.08f,
+                                                                      (e == 0 ? -1.0f : 1.0f) * (depth3d::swap.load() ? -1.0f : 1.0f), hudDiff,
                                                                       scene && scene.pixelFormat == tv.pixelFormat ? 1 : 0,
                                                                       1.0f / float(depth.width)};
         [enc setVertexBytes:rect length:sizeof rect atIndex:0];
