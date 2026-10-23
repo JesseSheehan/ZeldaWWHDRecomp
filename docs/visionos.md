@@ -98,12 +98,14 @@ game folder, and the other way round.
   (picture-in-picture). Look at the GamePad window and pinch to touch it (the map, the items screen).
   Settings > Display chooses another GamePad screen mode (picture-in-picture, automatic, off, GamePad only).
 - **Gear button** below either window: the settings menu, without the controller.
-- **Theater mode**: the theater button below the game window, or Settings > Theater. The game moves to a
-  big, slightly curved screen in front of you, in a sky over a calm sea (turn the Digital Crown to bring
-  your room back in) or in your own room, dimmed. The controls under the screen choose the
-  screen size (Small 3 m wide 4 m away, Medium 5 m at 7 m, Huge 12 m at 12 m) and the surroundings (also your room as it is), and
-  leave theater mode; Settings > Theater does the same with the controller. The GamePad window stays a
-  window, and pressing the Digital Crown leaves theater mode too. The choices are remembered.
+- **Full Screen**: the full-screen button below the game window, or Settings > Full Screen. The game moves
+  to a big, slightly curved screen: standing on a calm sea under a bright sky, with the picture reflected
+  in the water (turn the Digital Crown to bring your room back in), or in your room, dimmed or as it is.
+  The controls below the screen choose the screen size (Small 3 m wide 4 m away, Medium 5 m at 7 m, Huge
+  12 m at 12 m) and the surroundings, and leave full screen; Settings > Full Screen does the same with the
+  controller. The GamePad window stays a window, and pressing the Digital Crown leaves full screen too. The
+  choices are remembered. (Apple's own environments, such as Mount Hood, take only video players: the
+  game cannot dock into them.)
 - **Closed the game window?** The game keeps running in the GamePad window. Press **−** or **+** (that press
   only reopens the window: it doesn't open Settings or reach the game), or the TV button below the GamePad
   window.
@@ -170,10 +172,12 @@ it is reserved before `main()` so nothing else lands there first.
   ahead of time: the runtime generates its Metal shaders from the game's GPU code while it runs, so there is
   no shader library to compile offline, and visionOS's own shader cache plays that part after the first start.
 - **Text**: `runtime/src/platform/visionos/text_input.mm`, the counterpart of `gfx/text_input_appkit.mm`.
-- **Theater mode**: `visionos/WindWakerVision/WindWakerVision/Theater.swift` (an immersive space, its
+- **Full Screen**: `visionos/WindWakerVision/WindWakerVision/Theater.swift` (an immersive space, its
   screen and surroundings made of simple unlit shapes in code) and `runtime/src/platform/visionos/theater.mm`:
   the screen's texture is a RealityKit `DrawableQueue`, and the host composes the TV picture into it instead
-  of the TV window's layer, in the same render pass. `WWHD_TEST_THEATER=1` enters theater mode at start.
+  of the TV window's layer, in the same render pass. The reflection is a second mesh that samples the same
+  texture (the mirrored screen laid onto the water as seen from about 1.2 m up), darker and fading out: no
+  copy. `WWHD_TEST_THEATER=1` enters full screen at start, `=pattern` with colour bars instead of the game.
 - **Pause**: `runtime/src/app_pause.cpp` stops the game's main thread at a frame boundary, freezes the other
   guest threads as a save state does, stops the audio device, and on resume sets the guest clock back to
   where it stopped. The host (`host.mm`) asks for it when the app resigns active, after

@@ -92,8 +92,8 @@ struct TVWindow: View {
                 opener.dismissImmersiveSpace = dismissImmersiveSpace
                 _ = ControllerButtonWatcher.shared
                 _ = Theater.shared  // the settings menu's Theater tab reaches the app from now on
-                // test switch: WWHD_TEST_THEATER=1 enters theater mode at start
-                if ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"] == "1", !Theater.shared.active {
+                // test switch: WWHD_TEST_THEATER=1 enters full screen at start (=pattern: with colour bars, Theater.swift)
+                if let test = ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"], test == "1" || test == "pattern", !Theater.shared.active {
                     Task { await Theater.shared.enter() }
                 }
             }
@@ -116,7 +116,7 @@ struct TVWindow: View {
             .ornament(attachmentAnchor: .scene(.bottom)) {
                 HStack {
                     Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
-                    Button { Task { await Theater.shared.enter() } } label: { Label("Theater mode", systemImage: "sparkles.tv") }
+                    Button { Task { await Theater.shared.enter() } } label: { Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right") }
                     Button {
                         if gamepad.open { dismissWindow(id: "gamepad", value: GamePadWindowState.value) } else { openGamePad() }
                     } label: {

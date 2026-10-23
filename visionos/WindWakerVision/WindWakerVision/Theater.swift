@@ -141,20 +141,29 @@ struct TheaterSpace: View {
     private let theater = Theater.shared
     @State private var screen = Entity()
     @State private var world = Entity()
+    @State private var reflection = Entity()
     @State private var controls: Entity?
 
     var body: some View {
         RealityView { content, attachments in
-            let texture = try? TextureResource(image: Self.solid(red: 0, green: 0, blue: 0), options: .init(semantic: .color))
+            // test switch: WWHD_TEST_THEATER=pattern shows colour bars instead of the game (simulator)
+            let pattern = ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"] == "pattern"
+            let texture = try? TextureResource(image: pattern ? Self.colorBars() : Self.solid(red: 0, green: 0, blue: 0),
+                                               options: .init(semantic: .color))
             var material = UnlitMaterial(applyPostProcessToneMap: false)
             if let texture {
                 material.color = .init(tint: .white, texture: .init(texture))
-                try? TheaterOutput.start(on: texture)
+                if !pattern { try? TheaterOutput.start(on: texture) }
             }
-            screen.components.set(ModelComponent(mesh: Self.screenMesh(theater.size), materials: [material]))
+            screen.components.set(ModelComponent(mesh: Self.screenMesh(theater.size, onSea: theater.surroundings == .sky), materials: [material]))
             content.add(screen)
             world = Self.makeWorld()
             content.add(world)
+            // the screen's reflection in the sea: the same texture (no copy), darker, fading with depth
+            if let texture {
+                reflection.components.set(ModelComponent(mesh: Self.reflectionMesh(theater.size), materials: [Self.reflectionMaterial(texture)]))
+                world.addChild(reflection)
+            }
             if let panel = attachments.entity(for: "controls") {
                 content.add(panel)
                 controls = panel
@@ -181,35 +190,86 @@ struct TheaterSpace: View {
     }
 
     private func update() {
-        let size = theater.size
-        if let model = screen.components[ModelComponent.self], screen.name != "\(size.rawValue)" {
+        let size = theater.size, onSea = theater.surroundings == .sky
+        let key = "\(size.rawValue) \(onSea)"
+        if let model = screen.components[ModelComponent.self], screen.name != key {
             var m = model
-            m.mesh = Self.screenMesh(size)
+            m.mesh = Self.screenMesh(size, onSea: onSea)
             screen.components.set(m)
-            screen.name = "\(size.rawValue)"
+            screen.name = key
+            if var r = reflection.components[ModelComponent.self] {
+                r.mesh = Self.reflectionMesh(size)
+                reflection.components.set(r)
+            }
         }
-        // the controls just under the screen's bottom edge, as large as a panel 2 m away would look,
-        // facing the eyes (about 1.3 m up)
         if let controls {
-            let layout = Self.layout(size), scale = size.distance / 2
-            let y = layout.bottom - 0.05 - 0.15 * scale, z = -(size.distance - 0.1)
-            controls.position = [0, y, z]
-            controls.scale = .init(repeating: scale)
-            controls.orientation = simd_quatf(angle: -atan2(1.3 - y, -z), axis: [1, 0, 0])
+            if onSea {
+                // the screen stands on the water: the controls float closer, low, below it as you look,
+                // where they hide only the near end of the reflection
+                controls.position = [0, 0.4, -1.2]
+                controls.scale = .init(repeating: 1)
+                controls.orientation = simd_quatf(angle: -atan2(1.3 - 0.4, 1.2), axis: [1, 0, 0])
+            } else {
+                // just under the screen's bottom edge, as large as a panel 2 m away would look
+                let layout = Self.layout(size, onSea: false), scale = size.distance / 2
+                let y = layout.bottom - 0.05 - 0.15 * scale, z = -(size.distance - 0.1)
+                controls.position = [0, y, z]
+                controls.scale = .init(repeating: scale)
+                controls.orientation = simd_quatf(angle: -atan2(1.3 - y, -z), axis: [1, 0, 0])
+            }
         }
-        world.isEnabled = theater.surroundings == .sky
+        world.isEnabled = onSea
     }
 
-    /// Where the screen is: its centre and bottom edge (m up), with room under it for the controls.
-    static func layout(_ size: Theater.Size) -> (center: Float, bottom: Float) {
-        let h = size.width * 9 / 16, center = max(1.4, h / 2 + 0.7)
+    /// Where the screen is: its centre and bottom edge (m up). On the sea it stands just above the water,
+    /// so its reflection starts right under it; in the room it leaves space under it for the controls.
+    static func layout(_ size: Theater.Size, onSea: Bool) -> (center: Float, bottom: Float) {
+        let h = size.width * 9 / 16
+        let center = onSea ? seaLevel + 0.12 + h / 2 : max(1.4, h / 2 + 0.7)
         return (center, center - h / 2)
     }
 
     /// A screen of `size.width` (16:9) on a cylinder around the viewer, at eye height or above for the large ones.
-    static func screenMesh(_ size: Theater.Size) -> MeshResource {
+    static func screenMesh(_ size: Theater.Size, onSea: Bool) -> MeshResource { curvedMesh(size, onSea: onSea, name: "screen") { $0 } }
+
+    static let seaLevel: Float = -0.6
+
+    /// The screen mirrored in the sea, laid onto the water's surface as the eyes (about 1.2 m up, seated)
+    /// see it: each mirrored point is moved along its line of sight to just above the water.
+    static func reflectionMesh(_ size: Theater.Size) -> MeshResource {
+        let eye: Float = 1.2, surface = seaLevel + 0.005
+        return curvedMesh(size, onSea: true, name: "reflection") { p in
+            let mirrored = SIMD3<Float>(p.x, 2 * seaLevel - p.y, p.z)
+            let t = (eye - surface) / (eye - mirrored.y)
+            return SIMD3<Float>(0, eye, 0) + t * (mirrored - SIMD3<Float>(0, eye, 0))
+        }
+    }
+
+    /// The reflection's look: the game picture darkened and tinted by the water, most visible at the
+    /// waterline and fading out toward the far (top) edge of the picture.
+    static func reflectionMaterial(_ texture: TextureResource) -> UnlitMaterial {
+        var m = UnlitMaterial(applyPostProcessToneMap: false)
+        m.faceCulling = .none  // lying flat, seen from above: either winding
+        m.color = .init(tint: UIColor(red: 0.42, green: 0.58, blue: 0.72, alpha: 1), texture: .init(texture))
+        let h = 64
+        var fade = [UInt8](repeating: 255, count: h * 4)
+        for y in 0..<h {
+            // image row 0 is the picture's top (v = 1): transparent; the bottom row (the waterline) about half
+            let a = UInt8(140 * pow(Float(y) / Float(h - 1), 1.6))
+            fade[y * 4] = a; fade[y * 4 + 1] = a; fade[y * 4 + 2] = a
+        }
+        if let opacity = try? TextureResource(image: image(width: 1, height: h, pixels: fade), options: .init(semantic: .raw)) {
+            m.blending = .transparent(opacity: .init(scale: 1, texture: .init(opacity)))
+        } else {
+            m.blending = .transparent(opacity: .init(floatLiteral: 0.3))
+        }
+        return m
+    }
+
+    /// The screen's curved quad strip; `place` moves each vertex (the reflection lays it onto the sea).
+    private static func curvedMesh(_ size: Theater.Size, onSea: Bool, name: String, place: (SIMD3<Float>) -> SIMD3<Float>) -> MeshResource {
         let r = size.distance, w = size.width, h = w * 9 / 16
-        let centerY = layout(size).center
+        let centerY = layout(size, onSea: onSea).center
         let span = w / r, columns = 48
         var positions: [SIMD3<Float>] = [], normals: [SIMD3<Float>] = [], uvs: [SIMD2<Float>] = []
         var indices: [UInt32] = []
@@ -217,8 +277,9 @@ struct TheaterSpace: View {
             let u = Float(i) / Float(columns), a = (u - 0.5) * span
             let x = r * sin(a), z = -r * cos(a)
             for (row, y) in [(0, centerY + h / 2), (1, centerY - h / 2)] {
-                positions.append([x, y, z])
-                normals.append([-sin(a), 0, cos(a)])
+                let p = place([x, y, z])
+                positions.append(p)
+                normals.append(p.y < centerY - h / 2 ? [0, 1, 0] : [-sin(a), 0, cos(a)])
                 uvs.append([u, row == 0 ? 1 : 0])
             }
         }
@@ -226,7 +287,7 @@ struct TheaterSpace: View {
             let t0 = 2 * i, b0 = t0 + 1, t1 = t0 + 2, b1 = t0 + 3
             indices += [t0, b0, t1, t1, b0, b1]
         }
-        var d = MeshDescriptor(name: "screen")
+        var d = MeshDescriptor(name: name)
         d.positions = .init(positions)
         d.normals = .init(normals)
         d.textureCoordinates = .init(uvs)
@@ -260,7 +321,7 @@ struct TheaterSpace: View {
 
         // the sea, and a little round deck to stand on
         let sea = ModelEntity(mesh: .generatePlane(width: 400, depth: 400), materials: [unlit(UIColor(red: 0.10, green: 0.45, blue: 0.70, alpha: 1))])
-        sea.position = [0, -0.6, 0]
+        sea.position = [0, seaLevel, 0]
         world.addChild(sea)
         let foam = ModelEntity(mesh: .generateCylinder(height: 0.02, radius: 1.9), materials: [unlit(UIColor(white: 0.95, alpha: 1))])
         foam.position = [0, -0.59, 0]
@@ -313,6 +374,20 @@ struct TheaterSpace: View {
         return image(width: 1, height: h, pixels: pixels)
     }
 
+    /// Colour bars, brighter at the top (tests: which way up the picture and its reflection are).
+    static func colorBars() -> CGImage {
+        let w = 16, h = 9
+        let bars: [[UInt8]] = [[255, 255, 255], [255, 220, 0], [0, 220, 255], [0, 200, 0], [255, 0, 200], [230, 0, 0], [0, 0, 230], [40, 40, 40]]
+        var pixels: [UInt8] = []
+        for y in 0..<h {
+            for x in 0..<w {
+                let c = y < 2 ? [UInt8(255), 255, 255] : bars[x / 2]
+                pixels += [c[0], c[1], c[2], 255]
+            }
+        }
+        return image(width: w, height: h, pixels: pixels)
+    }
+
     static func solid(red: UInt8, green: UInt8, blue: UInt8) -> CGImage {
         image(width: 16, height: 9, pixels: [UInt8]((0..<16 * 9).flatMap { _ in [red, green, blue, 255] }))
     }
@@ -333,7 +408,7 @@ struct TheaterControls: View {
         @Bindable var theater = theater
         VStack(spacing: 12) {
             HStack(spacing: 12) {
-                Button { Task { await theater.leave() } } label: { Label("Leave Theater", systemImage: "rectangle.on.rectangle") }
+                Button { Task { await theater.leave() } } label: { Label("Leave Full Screen", systemImage: "arrow.down.right.and.arrow.up.left") }
                 Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
             }
             Picker("Screen", selection: $theater.size) {

@@ -62,10 +62,11 @@ static void draw_tab() {
             if (auto fn = g_action.load()) fn(action, value);
         });
     };
-    note("The game on a big screen in front of you, in a sky over the sea or in your dimmed room. The "
-         "GamePad window stays where it is. Pinch the controls under the screen, or use this page.");
+    note("The game on a big screen in front of you: over the sea under a bright sky (the picture reflects in "
+         "the water), in your dimmed room, or in your room as it is. The GamePad window stays where it is. "
+         "Pinch the controls under the screen, or use this page.");
     ImGui::Spacing();
-    if (ImGui::Button(active ? "Leave theater mode" : "Enter theater mode")) act(0, active ? 0 : 1);
+    if (ImGui::Button(active ? "Leave full screen" : "Full screen")) act(0, active ? 0 : 1);
     ImGui::SeparatorText("Screen");
     static const char* kSizes[] = {"Small (3 m wide, 4 m away)", "Medium (5 m wide, 7 m away)", "Huge (12 m wide, 12 m away)"};
     for (int i = 0; i < 3; i++)
@@ -80,7 +81,7 @@ static void draw_tab() {
 void theater_init() {
     overlay::ext::Tab tab;
     tab.id = "theater";
-    tab.name = "Theater";
+    tab.name = "Full Screen";
     tab.draw = draw_tab;
     overlay::ext::add_tab(std::move(tab), "audio");
 }
