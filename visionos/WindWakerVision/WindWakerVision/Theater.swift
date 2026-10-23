@@ -101,6 +101,9 @@ enum TheaterOutput {
     private static let lock = NSLock()
     private static var queue: TextureResource.DrawableQueue?
     private static var pending: TextureResource.Drawable?
+    /// queues just replaced (3D switched): RealityKit still finishes presenting their last frames on the
+    /// GPU's completion, after the runtime let go of them; freeing them at once crashed in that handler
+    private static var retired: [(TextureResource.DrawableQueue, Date)] = []
 
     /// `stereo`: 3D, both eyes side by side (twice as wide)
     @MainActor static func start(on texture: TextureResource, stereo: Bool = false) throws {
@@ -121,6 +124,9 @@ enum TheaterOutput {
     static func stop() {
         wwhd_visionos_set_theater(nil, nil, 0, 0)  // returns once no frame is being drawn into it
         lock.withLock {
+            let now = Date()
+            retired.removeAll { now.timeIntervalSince($0.1) > 5 }
+            if let q = queue { retired.append((q, now)) }
             queue = nil
             pending = nil
         }

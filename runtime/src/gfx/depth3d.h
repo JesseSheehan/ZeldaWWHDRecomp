@@ -8,6 +8,6 @@
 
 namespace depth3d {
 inline std::atomic<bool> enabled{false};
-inline std::atomic<float> strength{0.6f};  // 0..1: the depth effect (1: about 1.2 % of the width at infinity)
+inline std::atomic<float> strength{0.5f};  // 0..1: the depth effect (1: 0.8 % of the width between the eyes at infinity)
 inline std::atomic<bool> swap{false};      // left and right exchanged
 }  // namespace depth3d

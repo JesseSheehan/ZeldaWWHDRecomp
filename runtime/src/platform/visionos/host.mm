@@ -191,24 +191,39 @@ fragment float4 present_fs(VOut in [[stage_in]], texture2d<float> tex [[texture(
 }
 fragment float4 solid_fs(VOut in [[stage_in]], constant float4& color [[buffer(0)]]) { return color; }
 // depth-based 3D (gfx/depth3d.h): one eye's picture. Each pixel shows the picture `eye` (-1 left, +1 right)
-// half a disparity to the side, the disparity linear in the depth buffer (as 1 / distance is) around the
-// mean depth near the centre (at the screen's depth), up to `far` at infinity and `near` in front.
-// Where the final picture differs from the scene without the HUD (`scene`) the HUD is: kept in place.
-struct D3 { float far_; float near_; float eye; float hud; int scene; };
+// half a disparity to the side. The disparity grows with the depth buffer value (linear in it, as 1 /
+// distance is) from 0 at `zc[0]`, the nearest depth near the centre smoothed over time (depth3d_focus), to
+// `far` at infinity: everything sits at or behind the screen, nothing comes out of it. The depth is read
+// without filtering and widened by a pixel toward the nearer side, so an outline stays with its object; a
+// pixel that the shift uncovers takes the farther (background) side. Where the final picture differs from
+// the scene without the HUD (`scene`) the HUD is: kept in place.
+struct D3 { float far_; float eye; float hud; int scene; float texel; };
+static float d3_depth(depth2d<float> dep, float2 uv, float texel) {
+    constexpr sampler pt(coord::normalized, filter::nearest, address::clamp_to_edge);
+    float z = dep.sample(pt, uv);
+    z = min(z, dep.sample(pt, uv + float2(texel, 0)));
+    z = min(z, dep.sample(pt, uv - float2(texel, 0)));
+    return z;
+}
+static float d3_disparity(float z, float zc, float far_) { return clamp((z - zc) / max(1.0 - zc, 1e-4), 0.0, 1.0) * far_; }
+kernel void depth3d_focus(depth2d<float> dep [[texture(0)]], device float* zc [[buffer(0)]], uint id [[thread_position_in_grid]]) {
+    if (id != 0) return;
+    constexpr sampler pt(coord::normalized, filter::nearest, address::clamp_to_edge);
+    float m = 1.0;
+    for (int i = 0; i < 25; i++) m = min(m, dep.sample(pt, float2(0.3 + 0.1 * float(i % 5), 0.3 + 0.1 * float(i / 5))));
+    m = min(m, 0.9995);
+    zc[0] = zc[1] == 0.0 ? m : mix(zc[0], m, 0.05);  // (zc[1]: set once there is a value)
+    zc[1] = 1.0;
+}
 fragment float4 depth3d_fs(VOut in [[stage_in]], texture2d<float> fin [[texture(0)]], texture2d<float> scene [[texture(1)]],
-                           depth2d<float> dep [[texture(2)]], sampler s [[sampler(0)]], constant D3& p [[buffer(0)]]) {
+                           depth2d<float> dep [[texture(2)]], sampler s [[sampler(0)]], constant D3& p [[buffer(0)]],
+                           device const float* zc [[buffer(1)]]) {
     float2 uv = in.uv;
-    float zc = 0.0;
-    for (int i = 0; i < 9; i++) zc += dep.sample(s, float2(0.4 + 0.1 * float(i % 3), 0.45 + 0.1 * float(i / 3)));
-    zc = min(zc / 9.0, 0.9995);
     float x = uv.x;
-    for (int it = 0; it < 3; it++) {
-        float z = dep.sample(s, float2(x, uv.y));
-        float d = (z - zc) / (1.0 - zc);
-        d = d >= 0.0 ? min(d, 1.0) * p.far_ : max(d * p.far_, -p.near_);
-        x = uv.x - p.eye * 0.5 * d;
-    }
-    float2 src = float2(x, uv.y);
+    for (int it = 0; it < 4; it++) x = uv.x - p.eye * 0.5 * d3_disparity(d3_depth(dep, float2(x, uv.y), p.texel), zc[0], p.far_);
+    // uncovered background: of the source and a pixel further toward the eye's side, the farther one
+    float2 src = float2(x, uv.y), side = float2(x - p.eye * 2.0 * p.texel, uv.y);
+    if (d3_depth(dep, side, p.texel) > d3_depth(dep, src, p.texel) + 0.0005) src = side;
     if (p.scene == 0) return fin.sample(s, src);
     float4 f0 = fin.sample(s, uv), s0 = scene.sample(s, uv);
     if (distance(f0.rgb, s0.rgb) > p.hud) return f0;
@@ -416,6 +431,23 @@ static bool make_eyes() {
             (unsigned long)tv.height, (int)tv.pixelFormat, (unsigned long)depth.width, (unsigned long)depth.height,
             scene ? (scene.pixelFormat == tv.pixelFormat ? "yes" : "yes (other format)") : "no");
     }
+    // the focus depth, smoothed on the GPU (depth3d_focus)
+    static id<MTLComputePipelineState> focus;
+    static id<MTLBuffer> zc;
+    if (!focus) {
+        NSError* err = nil;
+        focus = [R.device newComputePipelineStateWithFunction:[g_lib newFunctionWithName:@"depth3d_focus"] error:&err];
+        zc = [R.device newBufferWithLength:16 options:MTLResourceStorageModeShared];
+        memset(zc.contents, 0, 16);  // (no value yet: the first frame takes its own)
+        if (!focus) LOG("[3d] focus kernel: %s", err.localizedDescription.UTF8String);
+    }
+    if (!focus) return false;
+    id<MTLComputeCommandEncoder> ce = [command_buffer() computeCommandEncoder];
+    [ce setComputePipelineState:focus];
+    [ce setTexture:depth atIndex:0];
+    [ce setBuffer:zc offset:0 atIndex:0];
+    [ce dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+    [ce endEncoding];
     const float strength = std::clamp(depth3d::strength.load(), 0.0f, 1.0f);
     for (int e = 0; e < 2; e++) {
         if (!g_eye[e] || g_eye[e].width != tv.width || g_eye[e].height != tv.height || g_eye[e].pixelFormat != tv.pixelFormat) {
@@ -432,15 +464,18 @@ static bool make_eyes() {
         id<MTLRenderCommandEncoder> enc = [command_buffer() renderCommandEncoderWithDescriptor:rp];
         [enc setRenderPipelineState:pipe];
         float rect[4] = {0, 0, 1, 1};
-        struct { float far_, near_, eye, hud; int scene; } p = {0.012f * strength, 0.006f * strength,
-                                                                 (e == 0 ? -1.0f : 1.0f) * (depth3d::swap.load() ? -1.0f : 1.0f), 0.03f,
-                                                                 scene && scene.pixelFormat == tv.pixelFormat ? 1 : 0};
+        // at most 0.8 % of the width between the eyes at infinity (Depth 1)
+        struct { float far_, eye, hud; int scene; float texel; } p = {0.008f * strength,
+                                                                      (e == 0 ? -1.0f : 1.0f) * (depth3d::swap.load() ? -1.0f : 1.0f), 0.08f,
+                                                                      scene && scene.pixelFormat == tv.pixelFormat ? 1 : 0,
+                                                                      1.0f / float(depth.width)};
         [enc setVertexBytes:rect length:sizeof rect atIndex:0];
         [enc setFragmentTexture:tv atIndex:0];
         [enc setFragmentTexture:scene ? scene : tv atIndex:1];
         [enc setFragmentTexture:depth atIndex:2];
         [enc setFragmentSamplerState:R.linearClamp atIndex:0];
         [enc setFragmentBytes:&p length:sizeof p atIndex:0];
+        [enc setFragmentBuffer:zc offset:0 atIndex:1];
         [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         [enc endEncoding];
     }
@@ -459,7 +494,16 @@ static void draw_imgui_half(ImDrawData* d, MTLRenderPassDescriptor* rp, id<MTLRe
 }
 
 // the side-by-side Full Screen picture; L is laid out for one half
+// While 3D is shown "depth3dShown" is saved as 1 (leaving 3D or the app leaving the front saves 0): a start
+// that finds 1 follows a crash in 3D, and starts with 3D off (load_graphics_options).
+std::atomic<bool> g_d3_marked{false};
+static void mark_3d_shown(bool shown) {
+    if (g_d3_marked.exchange(shown) == shown) return;
+    [[NSUserDefaults standardUserDefaults] setObject:shown ? @"1" : @"0" forKey:@"wwhd.depth3dShown"];
+}
+
 static void compose_tv_sbs(id<MTLTexture> target, const Layout& L) {
+    mark_3d_shown(true);
     const bool eyes = make_eyes();
     MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
     rp.colorAttachments[0].texture = target;
@@ -573,6 +617,13 @@ static void load_graphics_options() {
     if (saved_float("fps60Paced", v)) interp::load_paced_interpolation_at(60, v != 0);
     if (saved_float("metalFX", v)) g_metalfx = v != 0;
     if (saved_float("depth3d", v)) depth3d::enabled = v != 0;
+    std::string shown;
+    if (host_setting("depth3dShown", shown) && shown == "1" && depth3d::enabled.load()) {
+        depth3d::enabled = false;  // the last run ended while 3D was showing (a crash): start without it
+        set_host_setting("depth3dShown", "0");
+        set_float("depth3d", 0);
+        LOG("[3d] the last run ended while 3D was shown: 3D is off this time (Settings > Vision Pro to turn it on)");
+    }
     if (saved_float("depth3dStrength", v)) depth3d::strength = std::clamp(v, 0.0f, 1.0f);
     if (saved_float("depth3dSwap", v)) depth3d::swap = v != 0;
 }
@@ -586,6 +637,7 @@ static void app_inactive() {
     if (app_pause::paused()) return;
     const bool saved = ss::save_last_session(1000);
     set_host_setting("resumePending", saved ? "1" : "0");
+    if (gfx::g_d3_marked.exchange(false)) set_host_setting("depth3dShown", "0");  // (left the front normally)
     [[NSUserDefaults standardUserDefaults] synchronize];
     app_pause::request(true);
     LOG("[visionos] app inactive: pausing the game (last session state %s)", saved ? "written" : "not written");
@@ -660,6 +712,7 @@ void present_screens() {
     const bool theater = visionos::theater_size(theater_w, theater_h);
     // (3D: the texture holds both eyes side by side; the layout is one eye's)
     const bool sbs = theater && depth3d::enabled.load() && theater_w >= 2 * theater_h;
+    if (!sbs && g_d3_marked.load()) mark_3d_shown(false);
     if (theater) ls = CGSizeMake(sbs ? theater_w / 2 : theater_w, theater_h);
     static bool was_theater = false;
     if (theater != was_theater) {  // the overlay as large on the screen as in the window (720 points high there)
