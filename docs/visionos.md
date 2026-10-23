@@ -104,8 +104,8 @@ game folder, and the other way round.
   The sea and sky wear the game's own wave patterns, clouds and sun, read from your imported game folder
   when Full Screen opens (nothing from the game is part of the app; without them, plain shapes). The sky
   follows the game's time of day (the headset's clock before a game is loaded): dawn, day, dusk and night
-  colour the sky, sea and clouds, and the sun rises and sets. The game's reflection breaks up into swaying
-  strips, as on waves.
+  colour the sky, sea and clouds, and the sun rises and sets. The game's reflection lies see-through under
+  the wave lines and sways gently.
   The GamePad window opens with it and carries the full-screen controls below the GamePad picture: the
   screen size (Small 3 m wide 4 m away, Medium 5 m at 7 m, Huge 12 m at 12 m), the surroundings, Settings,
   leaving full screen, and hiding the GamePad picture (the window then holds only the controls, and the
@@ -189,7 +189,7 @@ it is reserved before `main()` so nothing else lands there first.
   `permanent_3d.pack` (Always: the wave patterns `umipt` and `b_wyurayura_tex1`, the sun `txa_taiyo`) and
   `sea_T_Stage.szs` (the clouds `cloudtx_01`-`03` and the horizon strips `ws_mae08`...), untiled with
   LatteAddrLib and BC-decoded on the device; the waves scroll and the clouds drift by texture offsets.
-  The reflection is 22 strips of the same texture, each offset on its own every frame (`reflectionStrips`);
+  The reflection is drawn just under the wave layers, about 55 % opaque at the waterline;
   `SkyClock.swift` reads the time of day (`wwhd_visionos_time_of_day`: dSv_info_c +0x44) about once a
   second. `WWHD_TEST_HOUR=18` shows a fixed hour.
   `WWHD_TEST_THEATER=1` enters full screen at start, `=pattern` with colour bars instead of the game.

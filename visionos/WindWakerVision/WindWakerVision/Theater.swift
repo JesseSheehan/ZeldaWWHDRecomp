@@ -188,11 +188,10 @@ struct TheaterSpace: View {
                 let t = Date().timeIntervalSince(animation.start)
                 animation.scenery(t)
                 sky.update()
-                // the reflection on moving water: each strip sways on its own, so the picture breaks up
-                for (i, strip) in reflection.children.enumerated() {
+                // the reflection sways a little, as on moving water
+                for strip in reflection.children {
                     guard var model = strip.components[ModelComponent.self], var m = model.materials.first as? UnlitMaterial else { continue }
-                    let phase = t * 1.4 + Double(i) * 0.9
-                    m.textureCoordinateTransform = .init(offset: [Float(sin(phase)) * 0.008 + Float(sin(phase * 0.37)) * 0.005, 0])
+                    m.textureCoordinateTransform = .init(offset: [Float(sin(t * 1.7)) * 0.004, Float(sin(t * 1.1)) * 0.006])
                     model.materials = [m]
                     strip.components.set(model)
                 }
@@ -269,7 +268,7 @@ struct TheaterSpace: View {
     /// The screen mirrored in the sea, laid onto the water's surface as the eyes (about 1.2 m up, seated)
     /// see it: each mirrored point is moved along its line of sight to just above the water.
     static func reflectionMesh(_ size: Theater.Size, rows: ClosedRange<Float> = 0...1) -> MeshResource {
-        let eye: Float = 1.2, surface = seaLevel + 0.005
+        let eye: Float = 1.2, surface = seaLevel + 0.001
         return curvedMesh(size, onSea: true, name: "reflection", rows: rows) { p in
             let mirrored = SIMD3<Float>(p.x, 2 * seaLevel - p.y, p.z)
             let t = (eye - surface) / (eye - mirrored.y)
@@ -277,19 +276,11 @@ struct TheaterSpace: View {
         }
     }
 
-    /// The reflection as strips across the water with gaps between them (the sea showing through), each
-    /// swaying on its own each frame: the toon look of a picture reflected in waves. 22 small draws.
+    /// The reflection: one see-through picture just under the game's wave lines (GameScenery draws them a
+    /// little higher), so the waves show over it; it sways gently each frame.
     static func reflectionStrips(_ parent: Entity, _ size: Theater.Size, _ look: UnlitMaterial) {
         parent.children.removeAll()
-        let count = 22
-        for i in 0..<count {
-            // near the waterline (v = 0: the picture's bottom, far away) the strips are long, toward the
-            // viewer the gaps grow
-            let v0 = Float(i) / Float(count), gap = 0.12 + 0.3 * v0
-            let v1 = v0 + (1 - gap) / Float(count)
-            let strip = ModelEntity(mesh: reflectionMesh(size, rows: v0...v1), materials: [look])
-            parent.addChild(strip)
-        }
+        parent.addChild(ModelEntity(mesh: reflectionMesh(size), materials: [look]))
     }
 
     /// The reflection's look: the game picture darkened and tinted by the water, most visible at the
@@ -301,8 +292,8 @@ struct TheaterSpace: View {
         let h = 64
         var fade = [UInt8](repeating: 255, count: h * 4)
         for y in 0..<h {
-            // image row 0 is the picture's top (v = 1): transparent; the bottom row (the waterline) about half
-            let a = UInt8(140 * pow(Float(y) / Float(h - 1), 1.6))
+            // image row 0 is the picture's top (v = 1, nearest the viewer): transparent; the waterline about 55 %
+            let a = UInt8(145 * pow(Float(y) / Float(h - 1), 1.2))
             fade[y * 4] = a; fade[y * 4 + 1] = a; fade[y * 4 + 2] = a
         }
         if let opacity = try? TextureResource(image: image(width: 1, height: h, pixels: fade), options: .init(semantic: .raw)) {
