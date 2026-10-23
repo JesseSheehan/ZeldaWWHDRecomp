@@ -136,12 +136,17 @@ game folder, and the other way round.
 
 Measured on an Apple Vision Pro (M2):
 
-| Settings > Graphics | Result |
-|---|---|
-| Internal resolution 1x (720p), 60 fps (frame interpolation) | steady 60 fps (**recommended**) |
-| 1.5x (1080p), 60 fps | mostly 60, dips to about 47–55 in busy scenes |
-| 2x (1440p), 60 fps | 41–51 fps, and the game slows down |
-| 3x | about 28 fps |
+| Settings | GPU per frame | Result |
+|---|---|---|
+| Internal resolution 1.25x (900p), 60 fps, Vision Pro > Sharper picture (MetalFX) on | about 13 ms | steady 60 fps, sharp (**recommended**) |
+| 1x (720p), 60 fps, MetalFX on | about 11 ms | steady 60 fps |
+| 1.5x (1080p), 60 fps | about 16.4 ms | mostly 60, dips in busy scenes (Dynamic resolution "Down to 75%" holds it) |
+| 1.5x, 45 fps | | steady, evenly paced on the 90 Hz display |
+| 1x, 90 fps, MetalFX on | about 11 ms | 75–85 fps (90 needs under 11 ms a frame); at 1.25x and up it draws 60 |
+| 2x (1440p), 60 fps | about 27 ms | 41–51 fps, and the game slows down |
+| 3x | | about 28 fps |
+
+The game logic keeps 30 steps a second in every frame rate mode (measured).
 
 For a sharper picture at 60 fps: **Settings > Vision Pro > Sharper picture (MetalFX upscaling)** enlarges
 the picture to the window's (or Full Screen's) real pixels with Apple's MetalFX instead of plain filtering,
