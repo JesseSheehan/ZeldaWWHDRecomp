@@ -90,13 +90,13 @@ static void draw_tab() {
     }
     ImGui::SeparatorText("3D");
     bool on3d = false;
-    if (check("3D (in Full Screen)", depth3d::enabled.load(), &on3d))
+    if (check("3D", depth3d::enabled.load(), &on3d))
         hostui::post([on3d] {
             depth3d::enabled = on3d;
             gfx::save_graphics_options();
         });
     note("Each eye gets its own picture, made from the game's depth: the world gets depth, the HUD and menus "
-         "stay at the screen. Shows in Full Screen. Off: no cost.");
+         "stay at the screen. In the game window and in Full Screen. Off: no cost.");
     if (depth3d::enabled.load()) {
         float strength = depth3d::strength.load();
         if (ImGui::SliderFloat("Depth", &strength, 0.05f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {

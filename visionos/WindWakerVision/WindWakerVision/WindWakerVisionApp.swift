@@ -1,10 +1,11 @@
 import AVFoundation
 import GameController
+import RealityKit
 import SwiftUI
 
 @main
 struct WindWakerVisionApp: App {
-    var body: some Scene {
+    var body: some SwiftUI.Scene {
         // the TV picture (and the settings overlay). One value, one window, as for the GamePad window: it
         // can be closed while the GamePad window stays, and − / + or the GamePad window's TV button open it again
         WindowGroup(id: "tv", for: String.self) { _ in
@@ -143,14 +144,61 @@ extension TVWindow {
 struct GameView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var view = GameLayerView()
+    /// 3D (Settings > Vision Pro > 3D): the window shows the per-eye screen over its layer view (which stays:
+    /// the runtime started from it, the controller and the keyboard go through it); checked twice a second
+    @State private var stereo = wwhd_visionos_depth3d() != 0
+    private let check = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        MetalLayerView { view }
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            .overlay { ShaderPreparationView() }
-            .onAppear { view.attach(true) }
-            .onDisappear { view.attach(false) }
-            .onChange(of: scenePhase) { _, phase in view.attach(phase != .background) }
+        ZStack {
+            MetalLayerView { view }
+            if stereo, !Theater.shared.active { StereoWindowScreen() }
+        }
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .overlay { ShaderPreparationView() }
+        .onAppear { view.attach(true) }
+        .onDisappear { view.attach(false) }
+        .onChange(of: scenePhase) { _, phase in view.attach(phase != .background) }
+        .onReceive(check) { _ in
+            let on = wwhd_visionos_depth3d() != 0
+            if on != stereo { stereo = on }
+        }
+    }
+}
+
+/// The game window in 3D: a flat RealityKit screen filling the window, with the same picture and per-eye
+/// material as Full Screen (Theater.swift ScreenPicture). While it shows, the runtime draws into its
+/// texture instead of the window's layer (host.mm: the screen texture, when set, wins).
+struct StereoWindowScreen: View {
+    @Environment(\.physicalMetrics) private var metrics
+    @State private var screen = Entity()
+    @State private var state = Holder()
+
+    final class Holder {
+        var picture: ScreenPicture?
+        var frames: EventSubscription?
+        var size = CGSize.zero
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            RealityView { content in
+                content.add(screen)
+                state.picture = ScreenPicture(screen: screen, reflection: Entity(), pattern: false)
+                let state = state
+                state.frames = content.subscribe(to: SceneEvents.Update.self) { _ in state.picture?.check() }
+            } update: { _ in
+                // the screen fills the view (points to metres)
+                guard geometry.size != state.size, geometry.size.width > 0 else { return }
+                state.size = geometry.size
+                let w = Float(metrics.convert(geometry.size.width, to: .meters)), h = Float(metrics.convert(geometry.size.height, to: .meters))
+                if var model = screen.components[ModelComponent.self] {
+                    model.mesh = .generatePlane(width: w, height: h)
+                    screen.components.set(model)
+                }
+            }
+        }
+        .onDisappear { state.picture?.release() }
     }
 }
 

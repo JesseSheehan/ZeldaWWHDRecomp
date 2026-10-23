@@ -114,7 +114,7 @@ game folder, and the other way round.
   the same with the controller, and pressing the Digital Crown leaves full screen too. The choices are
   remembered. (Apple's own environments, such as Mount Hood, take only video players: the
   game cannot dock into them.)
-- **3D** (Settings > Vision Pro > 3D, in Full Screen, experimental): each eye gets its own picture, made
+- **3D** (Settings > Vision Pro > 3D, in the game window and in Full Screen, experimental): each eye gets its own picture, made
   from the game's depth, so the world has depth while the HUD and menus stay at the screen. Depth sets
   how strong it is; Swap eyes if it looks inside out. Off, it costs nothing.
 - **Closed the game window?** The game keeps running in the GamePad window. Press **−** or **+** (that press
@@ -204,7 +204,9 @@ it is reserved before `main()` so nothing else lands there first.
   disparity linear in the depth buffer around the depth near the centre; where the picture differs from the
   scene without the HUD, unshifted) and draws them side by side into the Full Screen texture, which the
   screen's ShaderGraph material (`Resources/StereoScreen.usda`, RealityKit's Camera Index Switch) shows each
-  eye its half of. `WWHD_TEST_THEATER=stereo` checks the material with a test picture.
+  eye its half of. In the game window a RealityKit screen of the window's size takes the same picture while 3D
+  is on (`StereoWindowScreen`), over the window's layer view (which stays for the controller and keyboard).
+  `WWHD_TEST_THEATER=stereo` checks the material with a test picture.
 - **Text**: `runtime/src/platform/visionos/text_input.mm`, the counterpart of `gfx/text_input_appkit.mm`.
 - **Full Screen**: `visionos/WindWakerVision/WindWakerVision/Theater.swift` (an immersive space, its
   screen and surroundings made of simple unlit shapes in code) and `runtime/src/platform/visionos/theater.mm`:

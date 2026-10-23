@@ -104,9 +104,13 @@ enum TheaterOutput {
     /// queues just replaced (3D switched): RealityKit still finishes presenting their last frames on the
     /// GPU's completion, after the runtime let go of them; freeing them at once crashed in that handler
     private static var retired: [(TextureResource.DrawableQueue, Date)] = []
+    /// who shows the picture now (a ScreenPicture: Full Screen's, or the game window's in 3D); a stop by
+    /// another one changes nothing (the window's goes as Full Screen's starts, and the other way round)
+    private static var owner: ObjectIdentifier?
 
     /// `stereo`: 3D, both eyes side by side (twice as wide)
-    @MainActor static func start(on texture: TextureResource, stereo: Bool = false) throws {
+    @MainActor static func start(on texture: TextureResource, stereo: Bool = false, owner: ObjectIdentifier? = nil) throws {
+        self.owner = owner
         var w: Int32 = 0, h: Int32 = 0
         wwhd_visionos_tv_picture_size(&w, &h)
         let eye = min(3840, max(2560, Int(w)))
@@ -121,7 +125,9 @@ enum TheaterOutput {
         wwhd_visionos_set_theater(next, present, Int32(width), Int32(height))
     }
 
-    static func stop() {
+    static func stop(owner: ObjectIdentifier? = nil) {
+        if let owner, owner != self.owner { return }
+        self.owner = nil
         wwhd_visionos_set_theater(nil, nil, 0, 0)  // returns once no frame is being drawn into it
         lock.withLock {
             let now = Date()
@@ -187,10 +193,10 @@ enum TheaterOutput {
     }
 
     private func build(stereo: Bool) {
-        if !pattern { TheaterOutput.stop() }
+        if !pattern { TheaterOutput.stop(owner: ObjectIdentifier(self)) }
         guard let texture = try? TextureResource(image: pattern ? TheaterSpace.colorBars() : TheaterSpace.solid(red: 0, green: 0, blue: 0),
                                                  options: .init(semantic: .color)) else { return }
-        if !pattern { try? TheaterOutput.start(on: texture, stereo: stereo) }
+        if !pattern { try? TheaterOutput.start(on: texture, stereo: stereo, owner: ObjectIdentifier(self)) }
         var look: any RealityKit.Material
         if stereo, var m = stereoLook, (try? m.setParameter(name: "Picture", value: .textureResource(texture))) != nil {
             look = m
@@ -215,6 +221,11 @@ enum TheaterOutput {
         }
         reflectionScaleX = stereo ? 0.5 : 1
         self.stereo = stereo
+    }
+
+    /// The view that showed it goes: the runtime's picture stops coming here (if it still does).
+    func release() {
+        if !pattern { TheaterOutput.stop(owner: ObjectIdentifier(self)) }
     }
 }
 
@@ -293,7 +304,7 @@ struct TheaterSpace: View {
             WindowOpener.shared.dismissImmersiveSpace = dismissImmersiveSpace
         }
         .onDisappear {
-            TheaterOutput.stop()
+            animation.picture?.release()
             Theater.shared.ended()
             // the TV window again, whoever closed the space
             if !TVWindowState.shared.open { openWindow(id: "tv", value: TVWindowState.value) }
