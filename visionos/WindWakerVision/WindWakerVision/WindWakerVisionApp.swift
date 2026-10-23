@@ -144,32 +144,28 @@ extension TVWindow {
 struct GameView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var view = GameLayerView()
-    /// 3D (Settings > Vision Pro > 3D): the window shows the per-eye screen over its layer view (which stays:
-    /// the runtime started from it, the controller and the keyboard go through it); checked twice a second
-    @State private var stereo = wwhd_visionos_depth3d() != 0
-    private let check = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
+    // The game shows on a RealityKit screen over the layer view (StereoWindowScreen: 2D or 3D, the same
+    // way, so switching 3D swaps nothing). The layer view stays below it: the runtime started from it, the
+    // controller and the keyboard go through it, and it shows the picture where the screen cannot (in Full
+    // Screen this window is closed).
     var body: some View {
         ZStack {
-            // (hidden, not removed, while the 3D screen shows: the two at one depth flickered)
-            MetalLayerView { view }.opacity(stereo && !Theater.shared.active ? 0 : 1)
-            if stereo, !Theater.shared.active { StereoWindowScreen() }
+            MetalLayerView { view }
+            if !Theater.shared.active { StereoWindowScreen() }
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
         .overlay { ShaderPreparationView() }
         .onAppear { view.attach(true) }
         .onDisappear { view.attach(false) }
         .onChange(of: scenePhase) { _, phase in view.attach(phase != .background) }
-        .onReceive(check) { _ in
-            let on = wwhd_visionos_depth3d() != 0
-            if on != stereo { stereo = on }
-        }
     }
 }
 
-/// The game window in 3D: a flat RealityKit screen filling the window, with the same picture and per-eye
-/// material as Full Screen (Theater.swift ScreenPicture). While it shows, the runtime draws into its
-/// texture instead of the window's layer (host.mm: the screen texture, when set, wins).
+/// The game window's screen: a flat RealityKit screen filling the window, a little in front of the layer
+/// view, with the same picture and per-eye material as Full Screen (Theater.swift ScreenPicture). While it
+/// shows, the runtime draws into its texture instead of the window's layer (host.mm: the screen texture,
+/// when set, wins).
 struct StereoWindowScreen: View {
     @Environment(\.physicalMetrics) private var metrics
     @State private var screen = Entity()
@@ -195,6 +191,7 @@ struct StereoWindowScreen: View {
                     model.mesh = .generatePlane(width: w, height: h)
                     screen.components.set(model)
                 }
+                screen.position = [0, 0, 0.002]  // (in front of the layer view: the same depth flickered)
             }
         }
         .onDisappear {

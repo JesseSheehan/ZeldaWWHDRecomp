@@ -493,7 +493,6 @@ static void draw_imgui_half(ImDrawData* d, MTLRenderPassDescriptor* rp, id<MTLRe
     d->DisplaySize = size;
 }
 
-// the side-by-side Full Screen picture; L is laid out for one half
 // While 3D is shown "depth3dShown" is saved as 1 (leaving 3D or the app leaving the front saves 0): a start
 // that finds 1 follows a crash in 3D, and starts with 3D off (load_graphics_options).
 std::atomic<bool> g_d3_marked{false};
@@ -502,9 +501,15 @@ static void mark_3d_shown(bool shown) {
     [[NSUserDefaults standardUserDefaults] setObject:shown ? @"1" : @"0" forKey:@"wwhd.depth3dShown"];
 }
 
+// the side-by-side screen picture (the game window's and Full Screen's screen texture is always two
+// pictures wide): with 3D on the two eye pictures, otherwise the same picture in both halves (MetalFX
+// upscaled), so switching 3D changes only what is drawn here, from one frame to the next. L: one half.
 static void compose_tv_sbs(id<MTLTexture> target, const Layout& L) {
-    mark_3d_shown(true);
-    const bool eyes = make_eyes();
+    const bool on3d = depth3d::enabled.load();
+    if (on3d) mark_3d_shown(true);
+    else if (g_d3_marked.load()) mark_3d_shown(false);
+    const bool eyes = on3d && make_eyes();
+    id<MTLTexture> flat = eyes ? nil : upscaled(R.tv.tex, R.tv.srgb, (int)lroundf(L.tv.w), (int)lroundf(L.tv.h));
     MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
     rp.colorAttachments[0].texture = target;
     rp.colorAttachments[0].loadAction = MTLLoadActionClear;
@@ -516,7 +521,8 @@ static void compose_tv_sbs(id<MTLTexture> target, const Layout& L) {
     for (int i = 0; i < 2; i++) {
         Box b = L.tv;
         b.x += i * half;
-        draw_image(e, fmt, dw, dh, eyes ? g_eye[i] : R.tv.tex, R.tv.srgb, b, 1.0f, R.tv.dyn);
+        if (eyes) draw_image(e, fmt, dw, dh, g_eye[i], R.tv.srgb, b, 1.0f, R.tv.dyn);
+        else draw_image(e, fmt, dw, dh, flat, R.tv.srgb, b, 1.0f, flat == R.tv.tex ? R.tv.dyn : 1.0f);
     }
     ImDrawData* hud = nullptr;
     float op = 1;
@@ -710,8 +716,8 @@ void present_screens() {
     CGSize ls = last_size;
     int theater_w = 0, theater_h = 0;
     const bool theater = visionos::theater_size(theater_w, theater_h);
-    // (3D: the texture holds both eyes side by side; the layout is one eye's)
-    const bool sbs = theater && depth3d::enabled.load() && theater_w >= 2 * theater_h;
+    // (a texture two pictures wide holds both eyes side by side, 3D on or off; the layout is one eye's)
+    const bool sbs = theater && theater_w >= 2 * theater_h;
     if (!sbs && g_d3_marked.load()) mark_3d_shown(false);
     if (theater) ls = CGSizeMake(sbs ? theater_w / 2 : theater_w, theater_h);
     static bool was_theater = false;

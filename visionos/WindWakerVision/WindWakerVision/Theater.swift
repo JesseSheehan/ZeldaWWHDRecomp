@@ -149,29 +149,49 @@ enum TheaterOutput {
     }
 }
 
-/// The screen's picture in 2D or in 3D (Settings > Vision Pro > 3D), for whichever screen shows it now:
-/// Full Screen's or the game window's in 3D. One for the app (two, one per view, fought over the one
-/// texture and the picture flashed): a view attaches its screen (and reflection) when it appears and
-/// detaches when it goes; only the screen attached last gets the picture. In 3D the texture holds both eyes
-/// side by side and the screen's material (Resources/StereoScreen.usda) shows each eye its half; the
-/// reflection shows the left one. Follows the setting live (check, every frame: one flag read).
+/// The screen's picture, for whichever screen shows it now: Full Screen's or the game window's (one for the
+/// app: a view attaches its screen, and reflection, when it appears and detaches when it goes; only the
+/// screen attached last gets the picture). The texture is always two pictures wide: the runtime draws the
+/// two eye pictures into it with 3D on (Settings > Vision Pro > 3D) and the same picture twice with it off
+/// (host.mm compose_tv_sbs), so switching 3D changes nothing here: no texture, view or material is
+/// replaced, from one frame to the next. The screen's material (Resources/StereoScreen.usda) shows each eye
+/// its half; until it has loaded, a plain one shows the left half. The reflection shows the left half.
 @MainActor final class ScreenPicture {
     static let shared = ScreenPicture()
-    private(set) var stereo = false
-    private(set) var reflectionScaleX: Float = 1
+    let reflectionScaleX: Float = 0.5
     private var stereoLook: ShaderGraphMaterial?
-    private var loading = false
+    private var texture: TextureResource?
+    private var showsStereoLook = false
     private var screen: Entity?, reflection: Entity?
     private var owner: ObjectIdentifier?
     private var pattern = false
+
+    private init() {
+        Task { @MainActor in
+            self.stereoLook = try? await ShaderGraphMaterial(named: "/Root/StereoScreen", from: "StereoScreen.usda", in: .main)
+            if self.stereoLook == nil { print("[visionos] 3D: the per-eye material did not load") }
+        }
+    }
 
     func attach(screen: Entity, reflection: Entity?, pattern: Bool, owner: AnyObject) {
         self.screen = screen
         self.reflection = reflection
         self.pattern = pattern
         self.owner = ObjectIdentifier(owner)
-        build(stereo: false)
-        check()
+        if !pattern { TheaterOutput.stop() }
+        texture = try? TextureResource(image: pattern ? TheaterSpace.colorBarsTwice() : TheaterSpace.solid(red: 0, green: 0, blue: 0),
+                                       options: .init(semantic: .color))
+        guard let texture else { return }
+        if !pattern { try? TheaterOutput.start(on: texture, stereo: true) }
+        showsStereoLook = false
+        applyLook()
+        if let reflection {
+            for mirror in reflection.children {
+                guard var model = mirror.components[ModelComponent.self] else { continue }
+                model.materials = [TheaterSpace.reflectionMaterial(texture)]
+                mirror.components.set(model)
+            }
+        }
     }
 
     func detach(owner: AnyObject) {
@@ -179,40 +199,25 @@ enum TheaterOutput {
         self.owner = nil
         screen = nil
         reflection = nil
+        texture = nil
         if !pattern { TheaterOutput.stop() }
-        stereo = false
     }
 
+    /// every frame: the per-eye material once it has loaded (a material change only, once)
     func check() {
-        guard !pattern, screen != nil else { return }
-        let wanted = wwhd_visionos_depth3d() != 0
-        guard wanted != stereo else { return }
-        if wanted && stereoLook == nil {
-            if !loading {
-                loading = true
-                Task { @MainActor in
-                    self.stereoLook = try? await ShaderGraphMaterial(named: "/Root/StereoScreen", from: "StereoScreen.usda", in: .main)
-                    if self.stereoLook == nil { print("[visionos] 3D: the per-eye material did not load") }
-                    self.loading = false
-                }
-            }
-            return  // (again next frame, once it is loaded)
-        }
-        build(stereo: wanted)
+        if !showsStereoLook, stereoLook != nil, screen != nil { applyLook() }
     }
 
-    private func build(stereo: Bool) {
-        guard let screen else { return }
-        if !pattern { TheaterOutput.stop() }
-        guard let texture = try? TextureResource(image: pattern ? TheaterSpace.colorBars() : TheaterSpace.solid(red: 0, green: 0, blue: 0),
-                                                 options: .init(semantic: .color)) else { return }
-        if !pattern { try? TheaterOutput.start(on: texture, stereo: stereo) }
+    private func applyLook() {
+        guard let screen, let texture else { return }
         var look: any RealityKit.Material
-        if stereo, var m = stereoLook, (try? m.setParameter(name: "Picture", value: .textureResource(texture))) != nil {
+        if var m = stereoLook, (try? m.setParameter(name: "Picture", value: .textureResource(texture))) != nil {
             look = m
+            showsStereoLook = true
         } else {
             var m = UnlitMaterial(applyPostProcessToneMap: false)
             m.color = .init(tint: .white, texture: .init(texture))
+            m.textureCoordinateTransform = .init(scale: [0.5, 1])  // the left half (2D: the same in both)
             look = m
         }
         if var model = screen.components[ModelComponent.self] {
@@ -221,15 +226,6 @@ enum TheaterOutput {
         } else {
             screen.components.set(ModelComponent(mesh: .generatePlane(width: 1, height: 1), materials: [look]))
         }
-        if let reflection {
-            for mirror in reflection.children {
-                guard var model = mirror.components[ModelComponent.self] else { continue }
-                model.materials = [TheaterSpace.reflectionMaterial(texture)]
-                mirror.components.set(model)
-            }
-        }
-        reflectionScaleX = stereo ? 0.5 : 1
-        self.stereo = stereo
     }
 }
 
@@ -551,6 +547,19 @@ struct TheaterSpace: View {
                 try? "failed: \(error)".write(to: report, atomically: true, encoding: .utf8)
             }
         }
+    }
+
+    /// The colour bars side by side, as the runtime's two-picture texture holds them (tests).
+    static func colorBarsTwice() -> CGImage {
+        let bars = colorBars(), data = bars.dataProvider!.data! as Data
+        var pixels: [UInt8] = []
+        for y in 0..<bars.height {
+            for x in 0..<2 * bars.width {
+                let i = (y * bars.width + x % bars.width) * 4
+                pixels += [data[i], data[i + 1], data[i + 2], 255]
+            }
+        }
+        return image(width: 2 * bars.width, height: bars.height, pixels: pixels)
     }
 
     /// Colour bars, brighter at the top (tests: which way up the picture and its reflection are).

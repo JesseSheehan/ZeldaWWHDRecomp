@@ -204,8 +204,9 @@ it is reserved before `main()` so nothing else lands there first.
   disparity linear in the depth buffer around the depth near the centre; where the picture differs from the
   scene without the HUD, unshifted) and draws them side by side into the Full Screen texture, which the
   screen's ShaderGraph material (`Resources/StereoScreen.usda`, RealityKit's Camera Index Switch) shows each
-  eye its half of. In the game window a RealityKit screen of the window's size takes the same picture while 3D
-  is on (`StereoWindowScreen`), over the window's layer view (which stays for the controller and keyboard).
+  eye its half of. The game window shows the game on such a screen too (`StereoWindowScreen`, over the window's
+  layer view, which stays for the controller and keyboard). The screen texture is always two pictures wide:
+  with 3D off the same picture is drawn into both halves, so switching 3D only changes what is drawn.
   `WWHD_TEST_THEATER=stereo` checks the material with a test picture.
 - **Text**: `runtime/src/platform/visionos/text_input.mm`, the counterpart of `gfx/text_input_appkit.mm`.
 - **Full Screen**: `visionos/WindWakerVision/WindWakerVision/Theater.swift` (an immersive space, its
