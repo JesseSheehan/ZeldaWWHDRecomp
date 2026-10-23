@@ -197,7 +197,7 @@ fragment float4 solid_fs(VOut in [[stage_in]], constant float4& color [[buffer(0
 // without filtering and widened by a pixel toward the nearer side, so an outline stays with its object; a
 // pixel that the shift uncovers takes the farther (background) side. Where the final picture differs from
 // the scene without the HUD (`scene`), or does a little way around, the HUD is: kept in place, as is
-// everything when an overlay covers most of the picture (a fade, a full-screen menu: zc[2]); a shifted
+// the depth fading out while an overlay covers most of the picture (a fade, a full-screen menu: zc[3]); a shifted
 // pixel never takes the scene without the HUD (in a fade that is the scene before it darkened).
 struct D3 { float far_; float eye; float hud; int scene; float texel; };
 static float d3_depth(depth2d<float> dep, float2 uv, float texel) {
@@ -209,7 +209,10 @@ static float d3_depth(depth2d<float> dep, float2 uv, float texel) {
 }
 static float d3_disparity(float z, float zc, float far_) { return clamp((z - zc) / max(1.0 - zc, 1e-4), 0.0, 1.0) * far_; }
 // zc[0]: the focus depth (smoothed); zc[2]: how much of the picture an overlay covers (a fade to black, a
-// full-screen menu: the share of a 7 x 7 grid where the picture differs from the scene without the HUD)
+// full-screen menu: the share of a 7 x 7 grid where the picture differs from the scene without the HUD; the
+// grid leaves out the top and bottom fifth, where conversations put their black bars); zc[3]: how flat
+// the picture is, 0 (3D) .. 1, moving toward 1 above 40 % covered and back below 20 %, about 0.3 s each
+// way at 90 fps (a hard switch at one share flipped between 3D and flat in conversations: a twitch)
 kernel void depth3d_focus(depth2d<float> dep [[texture(0)]], texture2d<float> fin [[texture(1)]], texture2d<float> scene [[texture(2)]],
                           device float* zc [[buffer(0)]], constant float& hud [[buffer(1)]], constant int& hasScene [[buffer(2)]],
                           uint id [[thread_position_in_grid]]) {
@@ -223,10 +226,12 @@ kernel void depth3d_focus(depth2d<float> dep [[texture(0)]], texture2d<float> fi
     float covered = 0.0;
     if (hasScene != 0)
         for (int i = 0; i < 49; i++) {
-            const float2 q = float2(0.1 + float(i % 7) * 0.8 / 6.0, 0.1 + float(i / 7) * 0.8 / 6.0);
+            const float2 q = float2(0.1 + float(i % 7) * 0.8 / 6.0, 0.2 + float(i / 7) * 0.6 / 6.0);
             covered += distance(fin.sample(pt, q).rgb, scene.sample(pt, q).rgb) > hud ? 1.0 : 0.0;
         }
     zc[2] = covered / 49.0;
+    const float target = zc[2] > 0.4 ? 1.0 : zc[2] < 0.2 ? 0.0 : (zc[3] > 0.5 ? 1.0 : 0.0);
+    zc[3] = target > zc[3] ? min(target, zc[3] + 0.04) : max(target, zc[3] - 0.04);
 }
 fragment float4 depth3d_fs(VOut in [[stage_in]], texture2d<float> fin [[texture(0)]], texture2d<float> scene [[texture(1)]],
                            depth2d<float> dep [[texture(2)]], sampler s [[sampler(0)]], constant D3& p [[buffer(0)]],
@@ -234,7 +239,6 @@ fragment float4 depth3d_fs(VOut in [[stage_in]], texture2d<float> fin [[texture(
     float2 uv = in.uv;
     float4 f0 = fin.sample(s, uv);
     if (p.scene != 0) {
-        if (zc[2] > 0.3) return f0;
         const float2 t = float2(2.0 * p.texel, 2.0 * p.texel * float(fin.get_width()) / float(fin.get_height()));
         float h = distance(f0.rgb, scene.sample(s, uv).rgb);
         h = max(h, distance(fin.sample(s, uv + float2(t.x, 0)).rgb, scene.sample(s, uv + float2(t.x, 0)).rgb));
@@ -244,7 +248,9 @@ fragment float4 depth3d_fs(VOut in [[stage_in]], texture2d<float> fin [[texture(
         if (h > p.hud) return f0;
     }
     float x = uv.x;
-    for (int it = 0; it < 4; it++) x = uv.x - p.eye * 0.5 * d3_disparity(d3_depth(dep, float2(x, uv.y), p.texel), zc[0], p.far_);
+    const float far_ = p.far_ * (1.0 - zc[3]);
+    if (far_ <= 0.0) return f0;
+    for (int it = 0; it < 4; it++) x = uv.x - p.eye * 0.5 * d3_disparity(d3_depth(dep, float2(x, uv.y), p.texel), zc[0], far_);
     // uncovered background: of the source and a pixel further toward the eye's side, the farther one
     float2 src = float2(x, uv.y), side = float2(x - p.eye * 2.0 * p.texel, uv.y);
     if (d3_depth(dep, side, p.texel) > d3_depth(dep, src, p.texel) + 0.0005) src = side;
