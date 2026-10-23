@@ -21,7 +21,10 @@
 // panels yet.
 #import <GameController/GameController.h>
 #import <Metal/Metal.h>
+#if __has_include(<MetalFX/MetalFX.h>)  // (the visionOS simulator has no MetalFX: no upscaling there)
 #import <MetalFX/MetalFX.h>
+#define WWHD_METALFX 1
+#endif
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #include <mach/mach.h>
@@ -262,11 +265,17 @@ static void overlay_metal_init() { ImGui_ImplMetal_Init(R.device); }
 std::atomic<bool> g_metalfx{false};
 // what the last frame did, for the Vision Pro tab: input and output sizes (0: the picture was not upscaled)
 std::atomic<int> g_metalfx_in_w{0}, g_metalfx_in_h{0}, g_metalfx_out_w{0}, g_metalfx_out_h{0};
+#ifdef WWHD_METALFX
 static id<MTLFXSpatialScaler> g_scaler;
 static id<MTLTexture> g_scaled;
+#endif
 
 static id<MTLTexture> upscaled(id<MTLTexture> src, bool linear, int ow, int oh) {
     g_metalfx_out_w = 0;
+#ifndef WWHD_METALFX
+    (void)linear, (void)ow, (void)oh;
+    return src;
+#else
     if (!g_metalfx.load() || !src || (ow <= (int)src.width + 1 && oh <= (int)src.height + 1)) return src;
     static bool unsupported = false;
     if (unsupported) return src;
@@ -311,6 +320,7 @@ static id<MTLTexture> upscaled(id<MTLTexture> src, bool linear, int ow, int oh) 
     g_metalfx_out_h = oh;
     g_metalfx_out_w = ow;
     return g_scaled;
+#endif
 }
 
 static void compose_tv(id<MTLTexture> target, const Layout& L) {

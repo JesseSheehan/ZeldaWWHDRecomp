@@ -3,6 +3,9 @@
 // WWHD_RUNTIME_BUILD: the visionOS libraries from tools/visionos/build.sh (default build directory).
 WWHD_RUNTIME_BUILD = $(SRCROOT)/../../build-visionos/runtime
 
+// MetalFX (the runtime's upscaling) exists on the device only, not in the visionOS simulator
+WWHD_METALFX_LDFLAGS[sdk=xros*] = -framework MetalFX
+
 // Your Apple development team (and any override of the above) stays out of the repository: copy
 // Local.xcconfig.example to Local.xcconfig (ignored by git) and set your team ID there.
 #include? "Local.xcconfig"

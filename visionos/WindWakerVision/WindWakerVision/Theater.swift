@@ -174,6 +174,7 @@ struct TheaterSpace: View {
             }
             screen.components.set(ModelComponent(mesh: Self.screenMesh(theater.size, onSea: theater.surroundings == .sky), materials: [material]))
             content.add(screen)
+            if ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"] == "stereo" { Self.testStereoMaterial(on: screen) }
             world = Self.makeWorld()
             content.add(world)
             // the screen's reflection in the sea: the same texture (no copy), darker, fading with depth
@@ -425,6 +426,41 @@ struct TheaterSpace: View {
             pixels[y * 4 + 2] = UInt8(min(1, max(0, c.z)) * 255)
         }
         return image(width: 1, height: h, pixels: pixels)
+    }
+
+    /// Test (WWHD_TEST_THEATER=stereo): the 3D material with a side-by-side picture, left half colour
+    /// bars, right half grey; what happened goes to Documents/captures/stereo-test.txt.
+    @MainActor static func testStereoMaterial(on screen: Entity) {
+        Task { @MainActor in
+            let report = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("captures/stereo-test.txt")
+            try? FileManager.default.createDirectory(at: report.deletingLastPathComponent(), withIntermediateDirectories: true)
+            do {
+                var m = try await ShaderGraphMaterial(named: "/Root/StereoScreen", from: "StereoScreen.usda", in: .main)
+                let bars = colorBars()
+                var pixels: [UInt8] = []
+                for y in 0..<bars.height {
+                    for x in 0..<32 {
+                        if x < 16 {
+                            let c = (bars.dataProvider!.data! as Data)
+                            let i = (y * 16 + x) * 4
+                            pixels += [c[i], c[i + 1], c[i + 2], 255]
+                        } else {
+                            pixels += [128, 128, 128, 255]
+                        }
+                    }
+                }
+                let sbs = try await TextureResource(image: image(width: 32, height: bars.height, pixels: pixels), options: .init(semantic: .color))
+                try m.setParameter(name: "Picture", value: .textureResource(sbs))
+                if var model = screen.components[ModelComponent.self] {
+                    model.materials = [m]
+                    screen.components.set(model)
+                }
+                try? "loaded".write(to: report, atomically: true, encoding: .utf8)
+            } catch {
+                try? "failed: \(error)".write(to: report, atomically: true, encoding: .utf8)
+            }
+        }
     }
 
     /// Colour bars, brighter at the top (tests: which way up the picture and its reflection are).

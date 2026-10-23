@@ -1,0 +1,84 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+# The Full Screen screen's material in 3D (Theater.swift): the game picture holds both eyes side by side
+# (left eye in the left half); each eye samples its half (RealityKit's Camera Index Switch). With UScale 1
+# and RightOffset 0 it shows the whole picture (2D).
+def Xform "Root"
+{
+    def Material "StereoScreen"
+    {
+        asset inputs:Picture
+        float inputs:UScale = 0.5
+        float inputs:RightOffset = 0.5
+        token outputs:mtlx:surface.connect = </Root/StereoScreen/Unlit.outputs:out>
+
+        def Shader "Unlit"
+        {
+            uniform token info:id = "ND_realitykit_unlit_surfaceshader"
+            bool inputs:applyPostProcessToneMap = 0
+            color3f inputs:color.connect = </Root/StereoScreen/Image.outputs:out>
+            float inputs:opacity = 1
+            token outputs:out
+        }
+
+        def Shader "Image"
+        {
+            uniform token info:id = "ND_image_color3"
+            asset inputs:file.connect = </Root/StereoScreen.inputs:Picture>
+            float2 inputs:texcoord.connect = </Root/StereoScreen/UV.outputs:out>
+            color3f outputs:out
+        }
+
+        def Shader "TexCoord"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "Split"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/StereoScreen/TexCoord.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "Scale"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/StereoScreen/Split.outputs:outx>
+            float inputs:in2.connect = </Root/StereoScreen.inputs:UScale>
+            float outputs:out
+        }
+
+        def Shader "Eye"
+        {
+            uniform token info:id = "ND_realitykit_geometry_switch_cameraindex_float"
+            float inputs:mono = 0
+            float inputs:left = 0
+            float inputs:right.connect = </Root/StereoScreen.inputs:RightOffset>
+            float outputs:out
+        }
+
+        def Shader "Shift"
+        {
+            uniform token info:id = "ND_add_float"
+            float inputs:in1.connect = </Root/StereoScreen/Scale.outputs:out>
+            float inputs:in2.connect = </Root/StereoScreen/Eye.outputs:out>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/StereoScreen/Shift.outputs:out>
+            float inputs:in2.connect = </Root/StereoScreen/Split.outputs:outy>
+            float2 outputs:out
+        }
+    }
+}

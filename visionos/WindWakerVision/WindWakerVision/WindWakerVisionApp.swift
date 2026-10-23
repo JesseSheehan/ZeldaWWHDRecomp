@@ -98,7 +98,7 @@ struct TVWindow: View {
                 _ = ControllerButtonWatcher.shared
                 _ = Theater.shared  // the settings menu's Theater tab reaches the app from now on
                 // test switch: WWHD_TEST_THEATER=1 enters full screen at start (=pattern: with colour bars, Theater.swift)
-                if let test = ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"], test == "1" || test == "pattern", !Theater.shared.active {
+                if let test = ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"], test == "1" || test == "pattern" || test == "stereo", !Theater.shared.active {
                     Task { await Theater.shared.enter() }
                 }
             }
