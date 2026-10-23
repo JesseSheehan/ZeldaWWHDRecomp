@@ -17,8 +17,8 @@ import SwiftUI
         var label: String { ["Small", "Medium", "Huge"][rawValue] }
     }
     enum Surroundings: Int, CaseIterable {
-        case sky, dimmed
-        var label: String { ["Sky and sea", "Dimmed room"][rawValue] }
+        case sky, dimmed, room
+        var label: String { ["Sky and sea", "Dimmed room", "Your room"][rawValue] }
     }
 
     /// The immersive space is open, or opening.
@@ -141,6 +141,7 @@ struct TheaterSpace: View {
     private let theater = Theater.shared
     @State private var screen = Entity()
     @State private var world = Entity()
+    @State private var controls: Entity?
 
     var body: some View {
         RealityView { content, attachments in
@@ -154,10 +155,9 @@ struct TheaterSpace: View {
             content.add(screen)
             world = Self.makeWorld()
             content.add(world)
-            if let controls = attachments.entity(for: "controls") {
-                controls.position = [0, 0.95, -0.9]
-                controls.orientation = simd_quatf(angle: -.pi / 9, axis: [1, 0, 0])
-                content.add(controls)
+            if let panel = attachments.entity(for: "controls") {
+                content.add(panel)
+                controls = panel
             }
             update()
         } update: { _, _ in
@@ -188,13 +188,28 @@ struct TheaterSpace: View {
             screen.components.set(m)
             screen.name = "\(size.rawValue)"
         }
+        // the controls just under the screen's bottom edge, as large as a panel 2 m away would look,
+        // facing the eyes (about 1.3 m up)
+        if let controls {
+            let layout = Self.layout(size), scale = size.distance / 2
+            let y = layout.bottom - 0.05 - 0.15 * scale, z = -(size.distance - 0.1)
+            controls.position = [0, y, z]
+            controls.scale = .init(repeating: scale)
+            controls.orientation = simd_quatf(angle: -atan2(1.3 - y, -z), axis: [1, 0, 0])
+        }
         world.isEnabled = theater.surroundings == .sky
+    }
+
+    /// Where the screen is: its centre and bottom edge (m up), with room under it for the controls.
+    static func layout(_ size: Theater.Size) -> (center: Float, bottom: Float) {
+        let h = size.width * 9 / 16, center = max(1.4, h / 2 + 0.7)
+        return (center, center - h / 2)
     }
 
     /// A screen of `size.width` (16:9) on a cylinder around the viewer, at eye height or above for the large ones.
     static func screenMesh(_ size: Theater.Size) -> MeshResource {
         let r = size.distance, w = size.width, h = w * 9 / 16
-        let centerY = max(1.4, h / 2 + 0.4)
+        let centerY = layout(size).center
         let span = w / r, columns = 48
         var positions: [SIMD3<Float>] = [], normals: [SIMD3<Float>] = [], uvs: [SIMD2<Float>] = []
         var indices: [UInt32] = []

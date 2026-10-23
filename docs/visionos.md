@@ -100,8 +100,8 @@ game folder, and the other way round.
 - **Gear button** below either window: the settings menu, without the controller.
 - **Theater mode**: the theater button below the game window, or Settings > Theater. The game moves to a
   big, slightly curved screen in front of you, in a sky over a calm sea (turn the Digital Crown to bring
-  your room back in) or in your own room, dimmed. The controls under the screen (look down) choose the
-  screen size (Small 3 m wide 4 m away, Medium 5 m at 7 m, Huge 12 m at 12 m) and the surroundings, and
+  your room back in) or in your own room, dimmed. The controls under the screen choose the
+  screen size (Small 3 m wide 4 m away, Medium 5 m at 7 m, Huge 12 m at 12 m) and the surroundings (also your room as it is), and
   leave theater mode; Settings > Theater does the same with the controller. The GamePad window stays a
   window, and pressing the Digital Crown leaves theater mode too. The choices are remembered.
 - **Closed the game window?** The game keeps running in the GamePad window. Press **−** or **+** (that press

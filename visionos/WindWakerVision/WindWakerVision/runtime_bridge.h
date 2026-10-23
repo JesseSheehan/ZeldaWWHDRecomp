@@ -24,7 +24,7 @@ typedef void* (*wwhd_theater_next_fn)(void);
 typedef void (*wwhd_theater_present_fn)(void* command_buffer);
 void wwhd_visionos_set_theater(wwhd_theater_next_fn next, wwhd_theater_present_fn present, int width, int height);
 // the settings menu's Theater tab: action 0 enter (value 1) / leave (0), 1 screen size (0..2), 2 surroundings
-// (0 sky, 1 dimmed room); called on the main thread. The app reports what shows with theater_state.
+// (0 sky, 1 dimmed room, 2 the room as it is); called on the main thread. The app reports what shows with theater_state.
 typedef void (*wwhd_theater_action_fn)(int action, int value);
 void wwhd_visionos_set_theater_actions(wwhd_theater_action_fn fn);
 void wwhd_visionos_theater_state(int active, int size, int environment);
