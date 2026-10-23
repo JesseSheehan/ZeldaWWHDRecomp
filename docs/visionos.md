@@ -101,10 +101,13 @@ game folder, and the other way round.
 - **Full Screen**: the full-screen button below the game window, or Settings > Full Screen. The game moves
   to a big, slightly curved screen: standing on a calm sea under a bright sky, with the picture reflected
   in the water (turn the Digital Crown to bring your room back in), or in your room, dimmed or as it is.
-  The controls below the screen choose the screen size (Small 3 m wide 4 m away, Medium 5 m at 7 m, Huge
-  12 m at 12 m) and the surroundings, and leave full screen; Settings > Full Screen does the same with the
-  controller. The GamePad window stays a window, and pressing the Digital Crown leaves full screen too. The
-  choices are remembered. (Apple's own environments, such as Mount Hood, take only video players: the
+  The GamePad window opens with it and carries the full-screen controls below the GamePad picture: the
+  screen size (Small 3 m wide 4 m away, Medium 5 m at 7 m, Huge 12 m at 12 m), the surroundings, Settings,
+  leaving full screen, and hiding the GamePad picture (the window then holds only the controls, and the
+  GamePad picture shows as picture-in-picture on the big screen). Move it wherever you like. If you close
+  it, + opens it again and the controls float under the big screen meanwhile; Settings > Full Screen does
+  the same with the controller, and pressing the Digital Crown leaves full screen too. The choices are
+  remembered. (Apple's own environments, such as Mount Hood, take only video players: the
   game cannot dock into them.)
 - **Closed the game window?** The game keeps running in the GamePad window. Press **−** or **+** (that press
   only reopens the window: it doesn't open Settings or reach the game), or the TV button below the GamePad

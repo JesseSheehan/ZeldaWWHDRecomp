@@ -40,6 +40,11 @@ struct WindWakerVisionApp: App {
     static let shared = GamePadWindowState()
     static let value = "gamepad"
     var open = false
+    /// In full screen: the window shows only the full-screen controls (the GamePad picture goes back to
+    /// the picture-in-picture on the big screen). Remembered.
+    var collapsed = UserDefaults.standard.bool(forKey: "wwhd.gamepadCollapsed") {
+        didSet { UserDefaults.standard.set(collapsed, forKey: "wwhd.gamepadCollapsed") }
+    }
 }
 
 /// Whether the TV window is open.
@@ -253,32 +258,45 @@ struct GamePadWindow: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
-    @State private var view = GamePadLayerView()
     private let tv = TVWindowState.shared
+    private let state = GamePadWindowState.shared
 
     var body: some View {
-        MetalLayerView { view }
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            // a closed window may keep its view: follow the window itself (closed: picture-in-picture)
+        content
+            // a closed window may keep its view: follow the window itself
             .onAppear {
-                view.attach(true)
+                state.open = true
                 if !tv.open { register() }
             }
-            .onDisappear { view.attach(false) }
-            .onChange(of: scenePhase) { _, phase in view.attach(phase != .background) }
+            .onDisappear { state.open = false }
+            .onChange(of: scenePhase) { _, phase in state.open = phase != .background }
             // the TV window closed: its openWindow action may go with it, use this window's
             .onChange(of: tv.open) { _, open in if !open { register() } }
-            .ornament(attachmentAnchor: .scene(.bottom)) {
-                HStack {
-                    Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
-                    if !tv.open, !Theater.shared.active {
-                        Button { openWindow(id: "tv", value: TVWindowState.value) } label: { Label("Open TV screen", systemImage: "tv") }
-                    }
+    }
+
+    // In full screen this one window carries the full-screen controls under the GamePad picture, or only
+    // the controls (the picture collapsed); otherwise the GamePad picture with its buttons.
+    @ViewBuilder private var content: some View {
+        if Theater.shared.active, state.collapsed {
+            TheaterControls(inGamePadWindow: true)
+        } else {
+            GamePadPicture()
+                .ornament(attachmentAnchor: .scene(.bottom), contentAlignment: Theater.shared.active ? .top : .center) {
+                    if Theater.shared.active { TheaterControls(inGamePadWindow: true).padding(.top, 12) } else { gamepadButtons }
                 }
-                .labelStyle(.iconOnly)
-                .padding(8)
-                .glassBackgroundEffect()
+        }
+    }
+
+    private var gamepadButtons: some View {
+        HStack {
+            Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
+            if !tv.open, !Theater.shared.active {
+                Button { openWindow(id: "tv", value: TVWindowState.value) } label: { Label("Open TV screen", systemImage: "tv") }
             }
+        }
+        .labelStyle(.iconOnly)
+        .padding(8)
+        .glassBackgroundEffect()
     }
 
     /// The TV window closed: its actions may go with it, use this window's.
@@ -288,6 +306,20 @@ struct GamePadWindow: View {
         opener.dismissWindow = dismissWindow
         opener.openImmersiveSpace = openImmersiveSpace
         opener.dismissImmersiveSpace = dismissImmersiveSpace
+    }
+}
+
+/// The GamePad picture: hands its layer to the runtime while it shows (hidden: picture-in-picture).
+struct GamePadPicture: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var view = GamePadLayerView()
+
+    var body: some View {
+        MetalLayerView { view }
+            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .onAppear { view.attach(true) }
+            .onDisappear { view.attach(false) }
+            .onChange(of: scenePhase) { _, phase in view.attach(phase != .background) }
     }
 }
 
@@ -369,7 +401,6 @@ final class GamePadLayerView: GameControllerLayerView {
     func attach(_ open: Bool) {
         wwhd_visionos_set_drc_layer(open ? Unmanaged.passUnretained(layer).toOpaque() : nil)
         if open { updateDrawableSize() }
-        GamePadWindowState.shared.open = open
     }
 
     override func layoutSubviews() {

@@ -58,6 +58,8 @@ import SwiftUI
         switch await open(id: "theater") {
         case .opened:
             opener.dismissWindow?(id: "tv", value: TVWindowState.value)
+            // the GamePad window carries the full-screen controls: one window to move around
+            if !GamePadWindowState.shared.open { opener.openGamePad() }
         default:
             active = false
             report()
@@ -139,6 +141,7 @@ struct TheaterSpace: View {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     private let theater = Theater.shared
+    private let gamepad = GamePadWindowState.shared
     @State private var screen = Entity()
     @State private var world = Entity()
     @State private var reflection = Entity()
@@ -191,6 +194,8 @@ struct TheaterSpace: View {
 
     private func update() {
         let size = theater.size, onSea = theater.surroundings == .sky
+        // the controls float here only while the GamePad window (which carries them) is closed
+        controls?.isEnabled = !gamepad.open
         let key = "\(size.rawValue) \(onSea)"
         if let model = screen.components[ModelComponent.self], screen.name != key {
             var m = model
@@ -400,9 +405,12 @@ struct TheaterSpace: View {
     }
 }
 
-/// Under the screen, within reach: leave, the screen size, the surroundings, Settings.
+/// The full-screen controls: leave, the screen size, the surroundings, Settings. Under the GamePad window
+/// (WindWakerVisionApp.swift), or under the screen while that window is closed.
 struct TheaterControls: View {
+    var inGamePadWindow = false
     private let theater = Theater.shared
+    private let gamepad = GamePadWindowState.shared
 
     var body: some View {
         @Bindable var theater = theater
@@ -410,6 +418,12 @@ struct TheaterControls: View {
             HStack(spacing: 12) {
                 Button { Task { await theater.leave() } } label: { Label("Leave Full Screen", systemImage: "arrow.down.right.and.arrow.up.left") }
                 Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
+                if inGamePadWindow {
+                    Button { gamepad.collapsed.toggle() } label: {
+                        Label(gamepad.collapsed ? "Show GamePad Screen" : "Hide GamePad Screen",
+                              systemImage: gamepad.collapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
+                    }
+                }
             }
             Picker("Screen", selection: $theater.size) {
                 ForEach(Theater.Size.allCases, id: \.self) { Text($0.label).tag($0) }
@@ -420,7 +434,7 @@ struct TheaterControls: View {
             }
             .pickerStyle(.segmented)
         }
-        .frame(width: 460)
+        .frame(width: inGamePadWindow ? 560 : 460)
         .padding(20)
         .glassBackgroundEffect()
     }
