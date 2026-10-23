@@ -74,7 +74,7 @@ static void draw_tab() {
     for (int i = 0; i < 3; i++)
         if (radio(kSizes[i], g_size.load() == i)) act(1, i);
     ImGui::SeparatorText("Surroundings");
-    static const char* kEnvironments[] = {"Sky and sea (turn the Digital Crown to see your room)", "Your room, dimmed", "Your room"};
+    static const char* kEnvironments[] = {"The Great Sea (turn the Digital Crown to see your room)", "Your room, dimmed", "Your room"};
     for (int i = 0; i < 3; i++)
         if (radio(kEnvironments[i], g_environment.load() == i)) act(2, i);
 }

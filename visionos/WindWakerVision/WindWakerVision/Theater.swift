@@ -18,7 +18,7 @@ import SwiftUI
     }
     enum Surroundings: Int, CaseIterable {
         case sky, dimmed, room
-        var label: String { ["Sky and sea", "Dimmed room", "Your room"][rawValue] }
+        var label: String { ["The Great Sea", "Dimmed room", "Your room"][rawValue] }
     }
 
     /// The immersive space is open, or opening.
@@ -144,8 +144,7 @@ struct TheaterSpace: View {
     private let gamepad = GamePadWindowState.shared
     @State private var screen = Entity()
     @State private var world = Entity()
-    @State private var reflection = Entity()  // its strips (reflectionStrips)
-    @State private var reflectionLook: UnlitMaterial?
+    @State private var reflection = Entity()  // holds the reflection (its mesh follows the screen size)
     @State private var controls: Entity?
     @State private var frames: EventSubscription?
     @State private var animation = Animation()
@@ -173,8 +172,7 @@ struct TheaterSpace: View {
             content.add(world)
             // the screen's reflection in the sea: the same texture (no copy), darker, fading with depth
             if let texture {
-                reflectionLook = Self.reflectionMaterial(texture)
-                Self.reflectionStrips(reflection, theater.size, reflectionLook!)
+                reflection.addChild(ModelEntity(mesh: Self.reflectionMesh(theater.size), materials: [Self.reflectionMaterial(texture)]))
                 world.addChild(reflection)
             }
             // the game's own waves, clouds and sun, from the game folder (GameScenery), once decoded
@@ -231,7 +229,11 @@ struct TheaterSpace: View {
             m.mesh = Self.screenMesh(size, onSea: onSea)
             screen.components.set(m)
             screen.name = key
-            if let look = reflectionLook { Self.reflectionStrips(reflection, size, look) }
+            // the reflection follows the screen's size (its material, with the live picture, stays)
+            if let mirror = reflection.children.first, var model = mirror.components[ModelComponent.self] {
+                model.mesh = Self.reflectionMesh(size)
+                mirror.components.set(model)
+            }
         }
         if let controls {
             if onSea {
@@ -276,12 +278,6 @@ struct TheaterSpace: View {
         }
     }
 
-    /// The reflection: one see-through picture just under the game's wave lines (GameScenery draws them a
-    /// little higher), so the waves show over it; it sways gently each frame.
-    static func reflectionStrips(_ parent: Entity, _ size: Theater.Size, _ look: UnlitMaterial) {
-        parent.children.removeAll()
-        parent.addChild(ModelEntity(mesh: reflectionMesh(size), materials: [look]))
-    }
 
     /// The reflection's look: the game picture darkened and tinted by the water, most visible at the
     /// waterline and fading out toward the far (top) edge of the picture.

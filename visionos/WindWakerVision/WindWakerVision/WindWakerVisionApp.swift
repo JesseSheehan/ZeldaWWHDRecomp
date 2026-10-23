@@ -25,7 +25,7 @@ struct WindWakerVisionApp: App {
         .defaultSize(width: 640, height: 360)
         .windowResizability(.contentSize)
 
-        // theater mode (Theater.swift): the TV picture on a big screen; sky and sea (progressive: the
+        // theater mode (Theater.swift): the TV picture on a big screen; The Great Sea (progressive: the
         // Digital Crown brings the room back in) or the room dimmed (mixed)
         ImmersiveSpace(id: "theater") {
             TheaterSpace()
@@ -121,7 +121,7 @@ struct TVWindow: View {
             .ornament(attachmentAnchor: .scene(.bottom)) {
                 HStack {
                     Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
-                    Button { Task { await Theater.shared.enter() } } label: { Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right") }
+                    Button { Task { await Theater.shared.enter() } } label: { Label("Full Screen", systemImage: "mountain.2") }
                     Button {
                         if gamepad.open { dismissWindow(id: "gamepad", value: GamePadWindowState.value) } else { openGamePad() }
                     } label: {

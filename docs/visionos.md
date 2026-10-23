@@ -99,7 +99,7 @@ game folder, and the other way round.
   Settings > Display chooses another GamePad screen mode (picture-in-picture, automatic, off, GamePad only).
 - **Gear button** below either window: the settings menu, without the controller.
 - **Full Screen**: the full-screen button below the game window, or Settings > Full Screen. The game moves
-  to a big, slightly curved screen: standing on the sea under a bright sky, with the picture reflected
+  to a big, slightly curved screen: on The Great Sea under a bright sky, with the picture reflected
   in the water (turn the Digital Crown to bring your room back in), or in your room, dimmed or as it is.
   The sea and sky wear the game's own wave patterns, clouds and sun, read from your imported game folder
   when Full Screen opens (nothing from the game is part of the app; without them, plain shapes). The sky
