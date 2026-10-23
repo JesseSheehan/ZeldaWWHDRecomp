@@ -6,6 +6,8 @@
 //   wwhd_visionos_set_layer(layer)  the CAMetalLayer of its view, which the TV picture is presented to
 //   wwhd_runtime_main(argc, argv)   main.cpp's start-up; returns once the game threads run
 //   wwhd_visionos_set_drawable_size(w, h, scale) whenever the view's size changes
+//   wwhd_visionos_set_layer(layer or NULL) later: the TV window closed (NULL) or opened again (its new layer);
+//                                   while it is closed the game runs on (the GamePad window shows it)
 // and for the GamePad window (any time; it may open before or after the runtime starts, and close):
 //   wwhd_visionos_set_drc_layer(layer or NULL), wwhd_visionos_set_drc_drawable_size(w, h, scale),
 //   wwhd_visionos_drc_touch(down, x, y, w, h)  a pinch / touch on it (view points)
@@ -63,7 +65,10 @@ void save_graphics_options();
 }  // namespace gfx
 
 // ---------------------------------------------------------------- the app's calls
-static CAMetalLayer* g_layer;
+static std::mutex g_tv_mu;
+static CAMetalLayer* g_layer;   // the TV window's layer (g_tv_mu); nil while that window is closed
+static bool g_display_ready;    // display_init ran (main thread)
+static std::atomic<bool> g_tv_open{false};
 static std::mutex g_drc_mu;
 static CAMetalLayer* g_drc_layer;  // the GamePad window's layer; nil while that window is closed
 
@@ -84,9 +89,28 @@ extern "C" int wwhd_visionos_reserve_memory() {
     return kr;
 }
 
-extern "C" void wwhd_visionos_set_layer(void* layer) { g_layer = (__bridge CAMetalLayer*)layer; }
+namespace visionos {
+void text_input_attach(UIView* view);  // text_input.mm
+}
+static void configure_tv_layer(CAMetalLayer* l);
+
+extern "C" void wwhd_visionos_set_layer(void* layer) {
+    CAMetalLayer* l = (__bridge CAMetalLayer*)layer;
+    if (l && g_display_ready) configure_tv_layer(l);
+    {
+        std::lock_guard<std::mutex> lk(g_tv_mu);
+        g_layer = l;
+        if (g_display_ready) gfx::R.tv.layer = l;
+    }
+    g_tv_open = l != nil;
+    if (g_display_ready) {
+        if (UIView* view = [l.delegate isKindOfClass:[UIView class]] ? (UIView*)l.delegate : nil) visionos::text_input_attach(view);
+        LOG("[visionos] TV window %s", l ? "open" : "closed");
+    }
+}
 
 extern "C" void wwhd_visionos_set_drawable_size(double w, double h, double scale) {
+    std::lock_guard<std::mutex> lk(g_tv_mu);
     if (!g_layer) return;
     g_layer.contentsScale = scale;
     g_layer.drawableSize = CGSizeMake(std::max(1.0, w * scale), std::max(1.0, h * scale));
@@ -349,18 +373,25 @@ static void lifecycle_init() {
                 usingBlock:^(NSNotification*) { app_active(); }];
 }
 
+} // namespace gfx
+static void configure_tv_layer(CAMetalLayer* l) {
+    CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    l.colorspace = cs;
+    CGColorSpaceRelease(cs);
+    l.device = gfx::R.device;
+    l.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    l.framebufferOnly = YES;
+    l.maximumDrawableCount = 3;
+}
+namespace gfx {
+
 // Metal renderer start-up (metal_main.mm): the app's layer, input, the presentation pipelines
 void display_init() {
     if (!g_layer) fatal("visionOS: no layer (wwhd_visionos_set_layer before wwhd_runtime_main)");
     load_display_options();
-    CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    g_layer.colorspace = cs;
-    CGColorSpaceRelease(cs);
-    g_layer.device = R.device;
-    g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    g_layer.framebufferOnly = YES;
-    g_layer.maximumDrawableCount = 3;
+    configure_tv_layer(g_layer);
     R.tv.layer = g_layer;
+    g_tv_open = true;
     R.drc.layer = nil;
     R.drc.visible = false;
     interp::set_display_hz(90);
@@ -378,13 +409,22 @@ void display_init() {
     if (UIView* view = [g_layer.delegate isKindOfClass:[UIView class]] ? (UIView*)g_layer.delegate : nil)
         visionos::text_input_init(view);
     lifecycle_init();
+    g_display_ready = true;
     LOG("[visionos] display ready (%.0fx%.0f)", g_layer.drawableSize.width, g_layer.drawableSize.height);
 }
 
 // Metal, called from swap() on the render thread: compose and present the window
 void present_screens() {
     Screen& scr = R.tv;
-    CGSize ls = scr.layer ? scr.layer.drawableSize : CGSizeMake(0, 0);
+    CAMetalLayer* tv;
+    {
+        std::lock_guard<std::mutex> lk(g_tv_mu);
+        tv = scr.layer;
+    }
+    // while the TV window is closed the overlay keeps the size it last had (it still runs: text prompt)
+    static CGSize last_size = CGSizeMake(1920, 1080);
+    if (tv) last_size = tv.drawableSize;
+    CGSize ls = last_size;
     PresentPlan P = display_plan(R.tv.tex != nil, nominal_w(R.tv), nominal_h(R.tv), R.drc.tex != nil, nominal_w(R.drc),
                                  nominal_h(R.drc), ls.width, ls.height, R.frame);
     Layout L;
@@ -395,10 +435,10 @@ void present_screens() {
     L.scale = P.scale;
     if (overlay::guesthud::active()) overlay::guesthud::set_tv_region(P.tv.x, P.tv.y, P.tv.w, P.tv.h, !P.drc_only);
     g_overlay_draw = overlay::frame(P.dw, P.dh, overlay_metal_init);
-    if (scr.layer && scr.tex) {
+    if (tv && scr.tex) {
         MTLPixelFormat want = scr.srgb ? MTLPixelFormatBGRA8Unorm_sRGB : MTLPixelFormatBGRA8Unorm;
-        if (scr.layer.pixelFormat != want) scr.layer.pixelFormat = want;
-        if (id<CAMetalDrawable> drawable = scr.visible ? [scr.layer nextDrawable] : nil) {
+        if (tv.pixelFormat != want) tv.pixelFormat = want;
+        if (id<CAMetalDrawable> drawable = scr.visible ? [tv nextDrawable] : nil) {
             static bool first = true;
             if (first) {
                 first = false;
@@ -584,6 +624,17 @@ void init() {
         float v[input_map::kPadCount], game[input_map::kPadCount];
         static overlay::DeviceGates<uintptr_t> gates;
         gates.combine(devices_values(), overlay::captures() || overlay::shortcut_took_input(), v, game);
+        // − or + pressed while the TV window is closed: the app opens it again (WindWakerVisionApp.swift);
+        // that press (until released) neither toggles Settings nor reaches the game
+        static bool held_for_window[2];
+        const int window_buttons[2] = {input_map::kPadOptions, input_map::kPadMenu};
+        for (int i = 0; i < 2; i++) {
+            const int b = window_buttons[i];
+            const bool down = v[b] > 0.5f;
+            if (down && !g_tv_open.load()) held_for_window[i] = true;
+            if (!down) held_for_window[i] = false;
+            if (held_for_window[i]) v[b] = game[b] = 0;
+        }
         input_map::consume_shortcut_buttons(input_map::current(), v, game);
         PadState s = input_map::controller_state(input_map::current(), game);
         static uint32_t last_buttons = 0;

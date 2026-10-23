@@ -98,6 +98,9 @@ game folder, and the other way round.
   (picture-in-picture). Look at the GamePad window and pinch to touch it (the map, the items screen).
   Settings > Display chooses another GamePad screen mode (picture-in-picture, automatic, off, GamePad only).
 - **Gear button** below either window: the settings menu, without the controller.
+- **Closed the game window?** The game keeps running in the GamePad window. Press **−** or **+** (that press
+  only reopens the window: it doesn't open Settings or reach the game), or the TV button below the GamePad
+  window.
 - **First start**: with a shader head start in the game folder, the app compiles it once before the game
   starts (*Preparing shaders*, with a progress bar). visionOS keeps the compiled shaders, so later starts
   are quick; if the system clears the app's caches, the app prepares them again on its next start.

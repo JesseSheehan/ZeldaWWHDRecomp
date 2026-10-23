@@ -5,9 +5,12 @@ import SwiftUI
 @main
 struct WindWakerVisionApp: App {
     var body: some Scene {
-        // the TV picture (and the settings overlay)
-        WindowGroup(id: "tv") {
+        // the TV picture (and the settings overlay). One value, one window, as for the GamePad window: it
+        // can be closed while the GamePad window stays, and − / + or the GamePad window's TV button open it again
+        WindowGroup(id: "tv", for: String.self) { _ in
             TVWindow()
+        } defaultValue: {
+            TVWindowState.value
         }
         .defaultSize(width: 1280, height: 720)
         .windowResizability(.contentSize)
@@ -31,14 +34,52 @@ struct WindWakerVisionApp: App {
     var open = false
 }
 
+/// Whether the TV window is open.
+@Observable final class TVWindowState {
+    static let shared = TVWindowState()
+    static let value = "tv"
+    var open = false
+}
+
+/// Opens the windows from controller buttons (ControllerButtonWatcher), with the openWindow action of a
+/// window that is open: each window hands over its own when it appears, and the GamePad window again when
+/// the TV window closes.
+final class WindowOpener {
+    static let shared = WindowOpener()
+    var openWindow: OpenWindowAction?
+
+    func openTV() { openWindow?(id: "tv", value: TVWindowState.value) }
+    func openGamePad() { openWindow?(id: "gamepad", value: GamePadWindowState.value) }
+
+    /// + (Start): the TV window if it is closed, otherwise the GamePad window if that is (the game shows
+    /// its menus there). − (Settings): the TV window if it is closed. While the TV window is closed the
+    /// runtime keeps that press from the game and from Settings (host.mm).
+    func buttonPressed(start: Bool) {
+        if !TVWindowState.shared.open { openTV() }
+        else if start, !GamePadWindowState.shared.open { openGamePad() }
+    }
+}
+
 struct TVWindow: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.scenePhase) private var scenePhase
     private let gamepad = GamePadWindowState.shared
     private let library = GameLibrary.shared
     private let resume = ResumeOffer.shared
 
     var body: some View {
+        content
+            .onAppear {
+                TVWindowState.shared.open = true
+                WindowOpener.shared.openWindow = openWindow
+                _ = ControllerButtonWatcher.shared
+            }
+            .onDisappear { TVWindowState.shared.open = false }
+            .onChange(of: scenePhase) { _, phase in TVWindowState.shared.open = phase != .background }
+    }
+
+    @ViewBuilder private var content: some View {
         if library.state != .ready {
             ImportView().frame(minWidth: 960, minHeight: 540)
         } else if resume.pending {
@@ -49,15 +90,7 @@ struct TVWindow: View {
     }
 
     private var game: some View {
-        MetalLayerView { GameLayerView() }
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            .overlay { ShaderPreparationView() }
-            .onAppear {
-                // Start (+) brings the GamePad window back: the game shows its menus there
-                StartButtonWatcher.shared.onPress = { [openWindow] in
-                    if !GamePadWindowState.shared.open { openWindow(id: "gamepad", value: GamePadWindowState.value) }
-                }
-            }
+        GameView()
             .ornament(attachmentAnchor: .scene(.bottom)) {
                 HStack {
                     Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
@@ -76,6 +109,21 @@ struct TVWindow: View {
 
 extension TVWindow {
     private func openGamePad() { openWindow(id: "gamepad", value: GamePadWindowState.value) }
+}
+
+/// The TV picture: hands its layer to the runtime while the window is open (closed: the game runs on).
+struct GameView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var view = GameLayerView()
+
+    var body: some View {
+        MetalLayerView { view }
+            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .overlay { ShaderPreparationView() }
+            .onAppear { view.attach(true) }
+            .onDisappear { view.attach(false) }
+            .onChange(of: scenePhase) { _, phase in view.attach(phase != .background) }
+    }
 }
 
 /// The app was ended in the background (the system needed the memory, or the headset was off a long
@@ -153,11 +201,10 @@ struct ShaderPreparationView: View {
     private let started = Date()
 }
 
-/// Calls onPress when Start (+, Menu) is pressed on any game controller. The runtime polls the controllers
-/// itself; this only watches the button.
-final class StartButtonWatcher {
-    static let shared = StartButtonWatcher()
-    var onPress: (() -> Void)?
+/// Tells WindowOpener when Start (+, Menu) or − (Options) is pressed on any game controller. The runtime
+/// polls the controllers itself; this only watches the two buttons.
+final class ControllerButtonWatcher {
+    static let shared = ControllerButtonWatcher()
 
     private init() {
         for c in GCController.controllers() { watch(c) }
@@ -167,28 +214,44 @@ final class StartButtonWatcher {
     }
 
     private func watch(_ c: GCController) {
-        c.extendedGamepad?.buttonMenu.pressedChangedHandler = { [weak self] _, _, pressed in
-            if pressed { DispatchQueue.main.async { self?.onPress?() } }
+        guard let pad = c.extendedGamepad else { return }
+        pad.buttonMenu.pressedChangedHandler = { _, _, pressed in
+            if pressed { DispatchQueue.main.async { WindowOpener.shared.buttonPressed(start: true) } }
+        }
+        pad.buttonOptions?.pressedChangedHandler = { _, _, pressed in
+            if pressed { DispatchQueue.main.async { WindowOpener.shared.buttonPressed(start: false) } }
         }
     }
 }
 
 struct GamePadWindow: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openWindow) private var openWindow
     @State private var view = GamePadLayerView()
+    private let tv = TVWindowState.shared
 
     var body: some View {
         MetalLayerView { view }
             .aspectRatio(16.0 / 9.0, contentMode: .fit)
             // a closed window may keep its view: follow the window itself (closed: picture-in-picture)
-            .onAppear { view.attach(true) }
+            .onAppear {
+                view.attach(true)
+                WindowOpener.shared.openWindow = openWindow
+            }
             .onDisappear { view.attach(false) }
             .onChange(of: scenePhase) { _, phase in view.attach(phase != .background) }
+            // the TV window closed: its openWindow action may go with it, use this window's
+            .onChange(of: tv.open) { _, open in if !open { WindowOpener.shared.openWindow = openWindow } }
             .ornament(attachmentAnchor: .scene(.bottom)) {
-                Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
-                    .labelStyle(.iconOnly)
-                    .padding(8)
-                    .glassBackgroundEffect()
+                HStack {
+                    Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
+                    if !tv.open {
+                        Button { openWindow(id: "tv", value: TVWindowState.value) } label: { Label("Open TV screen", systemImage: "tv") }
+                    }
+                }
+                .labelStyle(.iconOnly)
+                .padding(8)
+                .glassBackgroundEffect()
             }
     }
 }
@@ -218,9 +281,17 @@ class GameControllerLayerView: UIView {
     var scale: Double { traitCollection.displayScale > 0 ? Double(traitCollection.displayScale) : 2 }
 }
 
-/// The TV picture: starts the runtime when it first appears.
+/// The TV picture: starts the runtime when it first appears; a later TV window (one closed and opened
+/// again) hands its layer to the running game.
 final class GameLayerView: GameControllerLayerView {
     private static var started = false
+
+    /// The window is open (the runtime presents the TV picture here) or closed.
+    func attach(_ open: Bool) {
+        guard Self.started else { return }
+        wwhd_visionos_set_layer(open ? Unmanaged.passUnretained(layer).toOpaque() : nil)
+        if open { updateDrawableSize() }
+    }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()

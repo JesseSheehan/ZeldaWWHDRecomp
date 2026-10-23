@@ -159,6 +159,15 @@ static void alert_prompt(const std::u16string& initial, const std::u16string& hi
 }
 
 // main thread, once the TV window's view exists (display_init)
+// the TV window's view (it is a new one each time that window opens)
+void text_input_attach(UIView* view) {
+    if (!g_field || view == g_host_view) return;
+    if (g_field.isFirstResponder) [g_field resignFirstResponder];
+    [g_field removeFromSuperview];
+    g_host_view = view;
+    [view addSubview:g_field];
+}
+
 void text_input_init(UIView* view) {
     g_host_view = view;
     g_field = [[WWTextField alloc] init];
