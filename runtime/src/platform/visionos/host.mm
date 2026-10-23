@@ -260,10 +260,13 @@ static void overlay_metal_init() { ImGui_ImplMetal_Init(R.device); }
 // resolution, for a fraction of a millisecond. Only when that is larger than the picture; the scaler and
 // its output are kept until the sizes change. Unsupported device or format: the picture as before.
 std::atomic<bool> g_metalfx{false};
+// what the last frame did, for the Vision Pro tab: input and output sizes (0: the picture was not upscaled)
+std::atomic<int> g_metalfx_in_w{0}, g_metalfx_in_h{0}, g_metalfx_out_w{0}, g_metalfx_out_h{0};
 static id<MTLFXSpatialScaler> g_scaler;
 static id<MTLTexture> g_scaled;
 
 static id<MTLTexture> upscaled(id<MTLTexture> src, bool linear, int ow, int oh) {
+    g_metalfx_out_w = 0;
     if (!g_metalfx.load() || !src || (ow <= (int)src.width + 1 && oh <= (int)src.height + 1)) return src;
     static bool unsupported = false;
     if (unsupported) return src;
@@ -303,6 +306,10 @@ static id<MTLTexture> upscaled(id<MTLTexture> src, bool linear, int ow, int oh) 
     g_scaler.inputContentWidth = src.width;
     g_scaler.inputContentHeight = src.height;
     [g_scaler encodeToCommandBuffer:command_buffer()];
+    g_metalfx_in_w = (int)src.width;
+    g_metalfx_in_h = (int)src.height;
+    g_metalfx_out_h = oh;
+    g_metalfx_out_w = ow;
     return g_scaled;
 }
 

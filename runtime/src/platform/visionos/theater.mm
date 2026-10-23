@@ -23,6 +23,7 @@
 
 namespace gfx {
 extern std::atomic<bool> g_metalfx;  // host.mm: MetalFX upscaling of the TV picture
+extern std::atomic<int> g_metalfx_in_w, g_metalfx_in_h, g_metalfx_out_w, g_metalfx_out_h;  // its last frame
 void save_graphics_options();
 }  // namespace gfx
 
@@ -79,6 +80,13 @@ static void draw_tab() {
     note("Enlarges the game picture to the window's (or Full Screen's) real pixels with Apple's MetalFX instead of "
          "plain filtering: crisper edges at the same internal resolution, for very little GPU time. Most visible at "
          "1x to 1.5x (Graphics > Internal resolution).");
+    if (gfx::g_metalfx.load()) {
+        if (const int ow = gfx::g_metalfx_out_w.load())
+            note("Active: the game's %dx%d picture is upscaled to %dx%d.", gfx::g_metalfx_in_w.load(), gfx::g_metalfx_in_h.load(), ow,
+                 gfx::g_metalfx_out_h.load());
+        else
+            note("Waiting: the picture is not enlarged right now (the window shows it at its size or smaller).");
+    }
     ImGui::SeparatorText("Full Screen");
     note("The game on a big screen in front of you: over the sea under a bright sky (the picture reflects in "
          "the water), in your dimmed room, or in your room as it is. The GamePad window stays where it is. "
