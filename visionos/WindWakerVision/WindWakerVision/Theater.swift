@@ -95,12 +95,18 @@ private extension UserDefaults {
 /// The screen's texture between RealityKit and the runtime's render thread (theater.mm calls next and
 /// present there).
 enum TheaterOutput {
-    static let width = 1920, height = 1080
+    /// the texture's size, chosen at each start: the game picture's (Graphics > Internal resolution), at
+    /// least 2560 x 1440 (room for MetalFX's sharpening) and at most 3840 x 2160
+    static private(set) var width = 2560, height = 1440
     private static let lock = NSLock()
     private static var queue: TextureResource.DrawableQueue?
     private static var pending: TextureResource.Drawable?
 
     @MainActor static func start(on texture: TextureResource) throws {
+        var w: Int32 = 0, h: Int32 = 0
+        wwhd_visionos_tv_picture_size(&w, &h)
+        width = min(3840, max(2560, Int(w)))
+        height = width * 9 / 16
         let descriptor = TextureResource.DrawableQueue.Descriptor(pixelFormat: .bgra8Unorm_srgb, width: width, height: height,
                                                                   usage: [.renderTarget, .shaderRead], mipmapsMode: .none)
         let q = try TextureResource.DrawableQueue(descriptor)

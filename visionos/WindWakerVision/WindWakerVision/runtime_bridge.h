@@ -33,6 +33,8 @@ void wwhd_visionos_theater_state(int active, int size, int environment);
 unsigned char* wwhd_visionos_game_texture(const char* game_dir, const char* file, const char* members, const char* name,
                                           int* width, int* height);
 void wwhd_visionos_free(void* p);
+// the TV picture's size at the full internal resolution (0 x 0 before the first frame)
+void wwhd_visionos_tv_picture_size(int* width, int* height);
 // the game's time of day in degrees (0..360, 15 per hour), or -1 before the game is up (Full Screen's sky)
 double wwhd_visionos_time_of_day(void);
 #ifdef __cplusplus

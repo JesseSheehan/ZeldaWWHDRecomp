@@ -902,10 +902,11 @@ void tab_graphics() {
          "on, the game logic still keeps 30 steps a second.)");
 
     heading("Internal resolution");
-    static const float scales[] = {1.0f, 1.5f, 2.0f, 3.0f};
-    static const char* const names[] = {"1x  (1280x720)", "1.5x  (1920x1080)", "2x  (2560x1440)", "3x  (3840x2160)"};
+    static const float scales[] = {1.0f, 1.25f, 1.5f, 2.0f, 3.0f};
+    static const char* const names[] = {"1x  (1280x720)", "1.25x  (1600x900)", "1.5x  (1920x1080)", "2x  (2560x1440)",
+                                        "3x  (3840x2160)"};
     float cur = hostui::res_scale();
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         if (i) ImGui::SameLine();
         float s = scales[i];
         if (radio(names[i], std::fabs(cur - s) < 0.01f)) post_changed([s] { hostui::set_res_scale(s); });
@@ -2567,7 +2568,7 @@ void activate_shortcut(int action, KeyOrigin origin) {
         case kFullscreen: hostui::set_fullscreen(!hostui::fullscreen()); break;
         case kPhoto: screenshot::request(); break;
         case kResolution: {
-            const float scales[] = {1, 1.5f, 2, 3};
+            const float scales[] = {1, 1.25f, 1.5f, 2, 3};
             float next = scales[0];
             for (float scale : scales) if (scale > hostui::res_scale() + 0.01f) { next = scale; break; }
             hostui::set_res_scale(next); break;

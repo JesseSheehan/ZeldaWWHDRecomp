@@ -21,6 +21,7 @@
 // panels yet.
 #import <GameController/GameController.h>
 #import <Metal/Metal.h>
+#import <MetalFX/MetalFX.h>
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #include <mach/mach.h>
@@ -253,7 +254,61 @@ static ImDrawData* g_overlay_draw = nullptr;
 static void overlay_metal_init() { ImGui_ImplMetal_Init(R.device); }
 
 // the window's picture: TV image scaled to fit, GamePad picture-in-picture, settings overlay on top
+// ---------------------------------------------------------------- MetalFX upscaling (Vision Pro > Picture)
+// The TV picture enlarged to the pixels it covers (the window's drawable, the Full Screen texture) by
+// MetalFX's spatial scaler instead of the presentation's filter: sharper edges at the same internal
+// resolution, for a fraction of a millisecond. Only when that is larger than the picture; the scaler and
+// its output are kept until the sizes change. Unsupported device or format: the picture as before.
+std::atomic<bool> g_metalfx{false};
+static id<MTLFXSpatialScaler> g_scaler;
+static id<MTLTexture> g_scaled;
+
+static id<MTLTexture> upscaled(id<MTLTexture> src, bool linear, int ow, int oh) {
+    if (!g_metalfx.load() || !src || (ow <= (int)src.width + 1 && oh <= (int)src.height + 1)) return src;
+    static bool unsupported = false;
+    if (unsupported) return src;
+    if (!g_scaler || g_scaler.inputWidth != src.width || g_scaler.inputHeight != src.height || g_scaler.outputWidth != (NSUInteger)ow ||
+        g_scaler.outputHeight != (NSUInteger)oh || g_scaler.colorTextureFormat != src.pixelFormat) {
+        g_scaler = nil;
+        g_scaled = nil;
+        if (![MTLFXSpatialScalerDescriptor supportsDevice:R.device]) {
+            unsupported = true;
+            LOG("[visionos] MetalFX upscaling: not supported on this device");
+            return src;
+        }
+        MTLFXSpatialScalerDescriptor* d = [MTLFXSpatialScalerDescriptor new];
+        d.inputWidth = src.width;
+        d.inputHeight = src.height;
+        d.outputWidth = ow;
+        d.outputHeight = oh;
+        d.colorTextureFormat = src.pixelFormat;
+        d.outputTextureFormat = src.pixelFormat;
+        d.colorProcessingMode = linear ? MTLFXSpatialScalerColorProcessingModeLinear : MTLFXSpatialScalerColorProcessingModePerceptual;
+        g_scaler = [d newSpatialScalerWithDevice:R.device];
+        if (!g_scaler || (g_scaler.colorTextureUsage & ~src.usage)) {
+            LOG("[visionos] MetalFX upscaling: no scaler for %lux%lu format %d", (unsigned long)src.width, (unsigned long)src.height,
+                (int)src.pixelFormat);
+            g_scaler = nil;
+            unsupported = true;
+            return src;
+        }
+        MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:src.pixelFormat width:ow height:oh mipmapped:NO];
+        td.usage = g_scaler.outputTextureUsage | MTLTextureUsageShaderRead;
+        td.storageMode = MTLStorageModePrivate;
+        g_scaled = [R.device newTextureWithDescriptor:td];
+        LOG("[visionos] MetalFX upscaling %lux%lu -> %dx%d", (unsigned long)src.width, (unsigned long)src.height, ow, oh);
+    }
+    g_scaler.colorTexture = src;
+    g_scaler.outputTexture = g_scaled;
+    g_scaler.inputContentWidth = src.width;
+    g_scaler.inputContentHeight = src.height;
+    [g_scaler encodeToCommandBuffer:command_buffer()];
+    return g_scaled;
+}
+
 static void compose_tv(id<MTLTexture> target, const Layout& L) {
+    // MetalFX first (its own pass): then the picture is drawn 1:1
+    id<MTLTexture> tv = upscaled(R.tv.tex, R.tv.srgb, (int)lroundf(L.tv.w), (int)lroundf(L.tv.h));
     MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
     rp.colorAttachments[0].texture = target;
     rp.colorAttachments[0].loadAction = MTLLoadActionClear;
@@ -262,7 +317,7 @@ static void compose_tv(id<MTLTexture> target, const Layout& L) {
     id<MTLRenderCommandEncoder> e = [command_buffer() renderCommandEncoderWithDescriptor:rp];
     float dw = target.width, dh = target.height;
     MTLPixelFormat fmt = target.pixelFormat;
-    draw_image(e, fmt, dw, dh, R.tv.tex, R.tv.srgb, L.tv, 1.0f, R.tv.dyn);
+    draw_image(e, fmt, dw, dh, tv, R.tv.srgb, L.tv, 1.0f, tv == R.tv.tex ? R.tv.dyn : 1.0f);
     if (L.pip_on && R.drc.tex) {
         float op = L.drc_only ? 1.0f : g_pip_opacity.load(), bw = std::max(1.0f, roundf(L.pip.w / 200.0f));
         float frame[4] = {0, 0, 0, 0.6f * op};
@@ -341,6 +396,7 @@ void save_graphics_options() {
     set_float("fps60", interp::mode());
     set_float("interpFps", interp::fps());
     set_float("fps60Paced", interp::paced_interpolation_at(60));
+    set_float("metalFX", g_metalfx.load());
 }
 static void load_graphics_options() {
     float v;
@@ -353,6 +409,7 @@ static void load_graphics_options() {
     if (saved_float("interpFps", v) && !getenv("WWHD_INTERP_FPS")) interp::set_fps((int)v);
     if (saved_float("fps60", v) && !getenv("WWHD_INTERP") && !getenv("WWHD_TRUE60")) interp::set_mode((int)v);
     if (saved_float("fps60Paced", v)) interp::load_paced_interpolation_at(60, v != 0);
+    if (saved_float("metalFX", v)) g_metalfx = v != 0;
 }
 
 // ---------------------------------------------------------------- pause and resume (app_pause.h)
@@ -738,4 +795,11 @@ extern "C" int wwhd_visionos_shader_progress(double* fraction) {
     const size_t total = warmprogress::latest_total.load(), done = warmprogress::latest_done.load();
     if (fraction) *fraction = total ? double(done) / double(total) : 0.0;
     return total && done < total ? 1 : 0;
+}
+
+// the TV picture's size at the full internal resolution (0 x 0 before the first frame): Full Screen sizes
+// its screen texture from it
+extern "C" void wwhd_visionos_tv_picture_size(int* width, int* height) {
+    *width = (int)gfx::nominal_w(gfx::R.tv);
+    *height = (int)gfx::nominal_h(gfx::R.tv);
 }

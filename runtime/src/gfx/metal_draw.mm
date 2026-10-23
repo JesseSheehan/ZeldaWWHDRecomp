@@ -24,6 +24,7 @@ extern "C" uint64_t g_shader_state_gen;  // gx2_core.cpp: bumped by shader-relev
 #include "write_watch.h"
 #include "metal.h"
 #include "cloud_proto.h"
+#include "perf_metrics.h"
 #include "runtime.h"
 #include "util/helpers/StringBuf.h"
 
@@ -1816,6 +1817,12 @@ void report_skips() {
         "%llu shader, %llu pipeline", (unsigned long long)g_compile_waits, g_compile_wait_ms,
         (unsigned long long)g_compile_wait_timeouts, (unsigned long long)g_skip[SK_COMPILING],
         (unsigned long long)g_skip[SK_PIPE_COMPILING]);
+    // with the performance overlay on, its averages in the log too (comparing settings on a device)
+    if (perf::enabled()) {
+        std::string summary = perf::summary();
+        for (auto& ch : summary) if (ch == '\n') ch = ';';
+        LOG("[perf] %s", summary.c_str());
+    }
     if (g_must_run_waits)
         LOG("[gfx] draws that waited for their compile (targets not redrawn every frame): %llu, %.0f ms in all",
             (unsigned long long)g_must_run_waits, g_must_run_wait_ms);

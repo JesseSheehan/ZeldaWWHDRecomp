@@ -98,7 +98,7 @@ game folder, and the other way round.
   (picture-in-picture). Look at the GamePad window and pinch to touch it (the map, the items screen).
   Settings > Display chooses another GamePad screen mode (picture-in-picture, automatic, off, GamePad only).
 - **Gear button** below either window: the settings menu, without the controller.
-- **Full Screen**: the full-screen button below the game window, or Settings > Full Screen. The game moves
+- **Full Screen**: the full-screen button below the game window, or Settings > Vision Pro. The game moves
   to a big, slightly curved screen: on The Great Sea under a bright sky, with the picture reflected
   in the water (turn the Digital Crown to bring your room back in), or in your room, dimmed or as it is.
   The sea and sky wear the game's own wave patterns, clouds and sun, read from your imported game folder
@@ -110,7 +110,7 @@ game folder, and the other way round.
   screen size (Small 3 m wide 4 m away, Medium 5 m at 7 m, Huge 12 m at 12 m), the surroundings, Settings,
   leaving full screen, and hiding the GamePad picture (the window then holds only the controls, and the
   GamePad picture shows as picture-in-picture on the big screen). Move it wherever you like. If you close
-  it, + opens it again and the controls float under the big screen meanwhile; Settings > Full Screen does
+  it, + opens it again and the controls float under the big screen meanwhile; Settings > Vision Pro does
   the same with the controller, and pressing the Digital Crown leaves full screen too. The choices are
   remembered. (Apple's own environments, such as Mount Hood, take only video players: the
   game cannot dock into them.)
@@ -138,10 +138,17 @@ Measured on an Apple Vision Pro (M2):
 
 | Settings > Graphics | Result |
 |---|---|
-| Internal resolution 1x (1080p), 60 fps (frame interpolation) | steady 60 fps (**recommended**) |
-| 1.5x (1620p), 60 fps | mostly 60, dips to about 47–55 in busy scenes |
-| 2x (2160p), 60 fps | 41–51 fps, and the game slows down |
+| Internal resolution 1x (720p), 60 fps (frame interpolation) | steady 60 fps (**recommended**) |
+| 1.5x (1080p), 60 fps | mostly 60, dips to about 47–55 in busy scenes |
+| 2x (1440p), 60 fps | 41–51 fps, and the game slows down |
 | 3x | about 28 fps |
+
+For a sharper picture at 60 fps: **Settings > Vision Pro > Sharper picture (MetalFX upscaling)** enlarges
+the picture to the window's (or Full Screen's) real pixels with Apple's MetalFX instead of plain filtering,
+for very little GPU time; it helps most at 1x to 1.5x. 1.25x (1600x900) sits between 1x and 1.5x, and
+Graphics > Dynamic resolution (down to 75 %) keeps 1.5x at 60 fps by lowering it only in busy scenes.
+With the performance overlay on, the log (`Documents/captures/wwhd.log`) gets its GPU and CPU averages
+every 300 frames (`[perf]` lines).
 
 The display runs at 90 Hz, so 60 fps is close to, but not perfectly, even.
 

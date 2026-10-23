@@ -21,6 +21,11 @@
 #include "overlay/widgets.h"
 #include "runtime.h"
 
+namespace gfx {
+extern std::atomic<bool> g_metalfx;  // host.mm: MetalFX upscaling of the TV picture
+void save_graphics_options();
+}  // namespace gfx
+
 typedef void* (*wwhd_theater_next_fn)(void);
 typedef void (*wwhd_theater_present_fn)(void* command_buffer);
 typedef void (*wwhd_theater_action_fn)(int action, int value);
@@ -55,7 +60,7 @@ bool theater_frame(const std::function<void(id<MTLTexture>)>& compose, id<MTLCom
     return true;
 }
 
-// the Theater tab (render thread, inside the overlay's frame)
+// the Vision Pro tab (render thread, inside the overlay's frame): the picture, and Full Screen
 static void draw_tab() {
     using namespace overlay::widgets;
     const bool active = g_active.load();
@@ -64,6 +69,17 @@ static void draw_tab() {
             if (auto fn = g_action.load()) fn(action, value);
         });
     };
+    ImGui::SeparatorText("Picture");
+    bool sharp = false;
+    if (check("Sharper picture (MetalFX upscaling)", gfx::g_metalfx.load(), &sharp))
+        hostui::post([sharp] {
+            gfx::g_metalfx = sharp;
+            gfx::save_graphics_options();
+        });
+    note("Enlarges the game picture to the window's (or Full Screen's) real pixels with Apple's MetalFX instead of "
+         "plain filtering: crisper edges at the same internal resolution, for very little GPU time. Most visible at "
+         "1x to 1.5x (Graphics > Internal resolution).");
+    ImGui::SeparatorText("Full Screen");
     note("The game on a big screen in front of you: over the sea under a bright sky (the picture reflects in "
          "the water), in your dimmed room, or in your room as it is. The GamePad window stays where it is. "
          "Pinch the controls under the screen, or use this page.");
@@ -82,8 +98,8 @@ static void draw_tab() {
 // main thread, display_init (before the overlay's first frame)
 void theater_init() {
     overlay::ext::Tab tab;
-    tab.id = "theater";
-    tab.name = "Full Screen";
+    tab.id = "visionpro";
+    tab.name = "Vision Pro";
     tab.draw = draw_tab;
     overlay::ext::add_tab(std::move(tab), "audio");
     g_game_memory = true;
