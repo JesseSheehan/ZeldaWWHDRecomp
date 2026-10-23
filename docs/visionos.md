@@ -99,8 +99,10 @@ game folder, and the other way round.
   Settings > Display chooses another GamePad screen mode (picture-in-picture, automatic, off, GamePad only).
 - **Gear button** below either window: the settings menu, without the controller.
 - **Full Screen**: the full-screen button below the game window, or Settings > Full Screen. The game moves
-  to a big, slightly curved screen: standing on a calm sea under a bright sky, with the picture reflected
+  to a big, slightly curved screen: standing on the sea under a bright sky, with the picture reflected
   in the water (turn the Digital Crown to bring your room back in), or in your room, dimmed or as it is.
+  The sea and sky wear the game's own wave patterns, clouds and sun, read from your imported game folder
+  when Full Screen opens (nothing from the game is part of the app; without them, plain shapes).
   The GamePad window opens with it and carries the full-screen controls below the GamePad picture: the
   screen size (Small 3 m wide 4 m away, Medium 5 m at 7 m, Huge 12 m at 12 m), the surroundings, Settings,
   leaving full screen, and hiding the GamePad picture (the window then holds only the controls, and the
@@ -180,7 +182,11 @@ it is reserved before `main()` so nothing else lands there first.
   the screen's texture is a RealityKit `DrawableQueue`, and the host composes the TV picture into it instead
   of the TV window's layer, in the same render pass. The reflection is a second mesh that samples the same
   texture (the mirrored screen laid onto the water as seen from about 1.2 m up), darker and fading out: no
-  copy. `WWHD_TEST_THEATER=1` enters full screen at start, `=pattern` with colour bars instead of the game.
+  copy. The game's scenery (`GameScenery.swift`, `runtime/src/platform/visionos/game_textures.cpp`) comes from
+  `permanent_3d.pack` (Always: the wave patterns `umipt` and `b_wyurayura_tex1`, the sun `txa_taiyo`) and
+  `sea_T_Stage.szs` (the clouds `cloudtx_01`-`03` and the horizon strips `ws_mae08`...), untiled with
+  LatteAddrLib and BC-decoded on the device; the waves scroll and the clouds drift by texture offsets.
+  `WWHD_TEST_THEATER=1` enters full screen at start, `=pattern` with colour bars instead of the game.
 - **Pause**: `runtime/src/app_pause.cpp` stops the game's main thread at a frame boundary, freezes the other
   guest threads as a save state does, stops the audio device, and on resume sets the guest clock back to
   where it stopped. The host (`host.mm`) asks for it when the app resigns active, after

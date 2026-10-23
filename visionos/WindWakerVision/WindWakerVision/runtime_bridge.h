@@ -28,6 +28,11 @@ void wwhd_visionos_set_theater(wwhd_theater_next_fn next, wwhd_theater_present_f
 typedef void (*wwhd_theater_action_fn)(int action, int value);
 void wwhd_visionos_set_theater_actions(wwhd_theater_action_fn fn);
 void wwhd_visionos_theater_state(int active, int size, int environment);
+// a texture of the game (game_textures.cpp) as RGBA8, or NULL: `file` relative to the game folder, `members`
+// the archive members on the way ("a.szs/b.bfres"), `name` the texture; free the result with wwhd_visionos_free
+unsigned char* wwhd_visionos_game_texture(const char* game_dir, const char* file, const char* members, const char* name,
+                                          int* width, int* height);
+void wwhd_visionos_free(void* p);
 #ifdef __cplusplus
 }
 #endif

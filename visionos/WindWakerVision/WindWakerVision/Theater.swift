@@ -146,6 +146,14 @@ struct TheaterSpace: View {
     @State private var world = Entity()
     @State private var reflection = Entity()
     @State private var controls: Entity?
+    @State private var frames: EventSubscription?
+    @State private var animation = Animation()
+
+    /// What moves each frame: the game's scenery (GameScenery) and the reflection's ripple.
+    final class Animation {
+        var scenery: (Double) -> Void = { _ in }
+        let start = Date()
+    }
 
     var body: some View {
         RealityView { content, attachments in
@@ -166,6 +174,23 @@ struct TheaterSpace: View {
             if let texture {
                 reflection.components.set(ModelComponent(mesh: Self.reflectionMesh(theater.size), materials: [Self.reflectionMaterial(texture)]))
                 world.addChild(reflection)
+            }
+            // the game's own waves, clouds and sun, from the game folder (GameScenery), once decoded
+            let animation = animation, world = world, folder = GameLibrary.shared.gameFolder.path
+            Task.detached(priority: .utility) {
+                let pictures = GameScenery.load(gameFolder: folder)
+                await MainActor.run { animation.scenery = GameScenery.build(pictures, into: world, seaLevel: Self.seaLevel) }
+            }
+            let reflection = reflection
+            frames = content.subscribe(to: SceneEvents.Update.self) { _ in
+                let t = Date().timeIntervalSince(animation.start)
+                animation.scenery(t)
+                // the reflection sways a little, as on moving water
+                if var model = reflection.components[ModelComponent.self], var m = model.materials.first as? UnlitMaterial {
+                    m.textureCoordinateTransform = .init(offset: [Float(sin(t * 1.7)) * 0.004, Float(sin(t * 1.1)) * 0.006])
+                    model.materials = [m]
+                    reflection.components.set(model)
+                }
             }
             if let panel = attachments.entity(for: "controls") {
                 content.add(panel)
@@ -319,9 +344,10 @@ struct TheaterSpace: View {
         sky.scale = [-1, 1, 1]
         world.addChild(sky)
 
-        // sun
+        // sun (the game's replaces it: GameScenery)
         let sun = ModelEntity(mesh: .generateSphere(radius: 6), materials: [unlit(UIColor(red: 1, green: 0.97, blue: 0.8, alpha: 1))])
         sun.position = [-60, 70, -100]
+        sun.name = "plainSun"
         world.addChild(sun)
 
         // the sea, and a little round deck to stand on
@@ -345,6 +371,9 @@ struct TheaterSpace: View {
             return Float(seed >> 40) / Float(1 << 24)
         }
         let white = unlit(UIColor(white: 1, alpha: 1)), shade = unlit(UIColor(red: 0.86, green: 0.9, blue: 0.97, alpha: 1))
+        let clouds = Entity()  // (the game's replace them: GameScenery)
+        clouds.name = "plainClouds"
+        world.addChild(clouds)
         for i in 0..<14 {
             let a = Float(i) / 14 * 2 * .pi + random() * 0.3
             if abs(remainder(a, 2 * .pi)) < 0.5 { continue }  // straight ahead: the screen
@@ -358,7 +387,7 @@ struct TheaterSpace: View {
                 cloud.addChild(puff)
             }
             cloud.look(at: [0, cloud.position.y, 0], from: cloud.position, relativeTo: nil)
-            world.addChild(cloud)
+            clouds.addChild(cloud)
         }
         return world
     }
