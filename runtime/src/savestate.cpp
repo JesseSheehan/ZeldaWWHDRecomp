@@ -51,6 +51,7 @@
 // (threads + HLE sync objects + alarms + guest clock, heaps, open files, AX voices, GX2 registers,
 // runtime allocations) and guest memory (MEM2, runtime objects, fixed slots, foreground bucket,
 // MEM1; all-zero 64 KiB chunks are left out).
+#include "app_pause.h"
 #include "savestate.h"
 #include "savestate_native_gate.h"
 #include "mods/story_native_restore_resume.h"
@@ -1913,6 +1914,7 @@ void service(Cpu* c) {
     service_warp(c);       // world editor
     service_file_save(c);  // world editor test states
     if (int slot = g_psave_req.exchange(0)) do_portable_save(c, slot);
+    app_pause::service();  // the app is not in front (after a "Last session" state it asked for)
     if (g_fixed_seed) {  // (before service_portable_load: a load applied now is followed from the next boundary on)
         switch (g_fixed_seed_load.step(ld32(GD(0x101FF560)))) {
         case fixed_seed::LoadGate::kLoading: apply_fixed_seed("portable state: loading the new stage"); break;

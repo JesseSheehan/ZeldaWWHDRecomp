@@ -14,9 +14,13 @@
 # Options:
 #   --build-dir DIR     where everything goes (default: build-visionos/ in the repository, ignored by git)
 #   --jobs N            parallel compile jobs (default: all cores)
+#   --shader-template FILE   the code-free shader template (default: WWHD_SHADER_TEMPLATE, then
+#                       tools/shadercache/template.bin; the desktop release has one in tools/shadercache)
+#   --no-shaders        skip the shader head start (shaders then compile while you play)
 #
 # Output, all inside the build directory (game-derived: never commit or share it):
 #   game/      the extracted game (--image / --archive), to import into the app
+#   <game>/shadercache/headstart.bin   the shader head start, inside the game folder you import
 #   gen/       the recompiled game code (C)
 #   runtime/   the visionOS libraries the Xcode project links (libwwhd.a, libgamecode.a, ...)
 set -euo pipefail
@@ -25,11 +29,12 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD="$REPO/build-visionos"
 JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 8)"
 GAME="" IMAGE="" ARCHIVE=""
+SHADER_TEMPLATE="${WWHD_SHADER_TEMPLATE:-}" SHADERS=1
 EXTRACT_ARGS=()
 
 die() { echo "error: $*" >&2; exit 1; }
 step() { echo; echo "==> $*"; }
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -40,6 +45,8 @@ while [ $# -gt 0 ]; do
         --keys-stdin) EXTRACT_ARGS+=("$1"); shift ;;
         --build-dir) BUILD="${2:?}"; shift 2 ;;
         --jobs) JOBS="${2:?}"; shift 2 ;;
+        --shader-template) SHADER_TEMPLATE="${2:?}"; shift 2 ;;
+        --no-shaders) SHADERS=0; shift ;;
         -h|--help) usage ;;
         *) echo "unknown option: $1" >&2; usage ;;
     esac
@@ -124,6 +131,27 @@ cmake -S "$REPO" -B "$BUILD/runtime" -G Ninja -DCMAKE_SYSTEM_NAME=visionOS -DCMA
     -DGEN_DIR="$BUILD/gen" > "$BUILD/cmake.log" 2>&1 || { tail -20 "$BUILD/cmake.log"; die "CMake configuration failed (log: $BUILD/cmake.log)"; }
 ninja -C "$BUILD/runtime" -j "$JOBS" wwhd gamecode cemu_latte imgui wwhd_zstd_static lz4_static > "$BUILD/ninja.log" 2>&1 ||
     { grep -E "error:|FAILED" "$BUILD/ninja.log" | head -20; die "the build failed (log: $BUILD/ninja.log)"; }
+
+# ---------------------------------------------------------------- shader head start
+# The game's shaders, translated ahead from its own shader archives with the template of render states
+# (code-free, tools/shadercache/README.md): the app compiles them once on its first start (a progress
+# screen), so new areas do not stutter. Game-derived: it stays in the game folder, never in git.
+if [ "$SHADERS" = 1 ]; then
+    [ -n "$SHADER_TEMPLATE" ] || SHADER_TEMPLATE="$REPO/tools/shadercache/template.bin"
+    if [ -f "$SHADER_TEMPLATE" ]; then
+        step "Preparing the shader head start in $GAME/shadercache"
+        mkdir -p "$GAME/shadercache"
+        python3 "$REPO/tools/shaderprep.py" build "$GAME/shadercache/headstart.bin.partial" --game "$GAME/content" \
+            --template "$SHADER_TEMPLATE" --max 0 > "$BUILD/shaderprep.log" 2>&1 ||
+            { tail -20 "$BUILD/shaderprep.log"; die "the shader head start failed (log: $BUILD/shaderprep.log; --no-shaders skips it)"; }
+        mv "$GAME/shadercache/headstart.bin.partial" "$GAME/shadercache/headstart.bin"
+        grep -E "^archive shaders" "$BUILD/shaderprep.log" | sed 's/ -> .*//' || true
+    else
+        step "No shader template: skipping the shader head start"
+        echo "Without it, shaders compile while you play (short stutters in new areas). The desktop release has"
+        echo "the template in tools/shadercache/template.bin: pass it with --shader-template FILE."
+    fi
+fi
 
 # ---------------------------------------------------------------- next steps
 LOCAL="$REPO/visionos/Local.xcconfig"

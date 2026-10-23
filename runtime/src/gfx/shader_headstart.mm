@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <sys/stat.h>
 #include <zlib.h>
 
 #include "Cafe/HW/Latte/ISA/RegDefines.h"
@@ -204,3 +205,39 @@ int headstart_warm() {
 }  // namespace gfx
 
 int gfx_headstart_warm() { return gfx::headstart_warm(); }  // main.cpp: --warm-shaders
+
+// Devices without setup (visionOS): the head start is compiled once, the first time the app starts with
+// it, and a marker beside the runtime's own shader cache remembers which head start that was (its size
+// and time). The system's compiled-shader cache lives in the same Caches folder, so if the system purges
+// it the marker goes too and the next start prepares again.
+static std::string device_warm_marker() {
+    const char* home = getenv("HOME");
+    const std::string dir = std::string(home ? home : ".") + "/Library/Caches/wwhd";
+    mkdir(dir.c_str(), 0755);
+    return dir + "/headstart-prepared";
+}
+static std::string device_warm_identity() {
+    struct stat st;
+    const std::string path = gfx::headstart_path();
+    if (path == "0" || stat(path.c_str(), &st) != 0) return "";
+    return std::to_string((long long)st.st_size) + " " + std::to_string((long long)st.st_mtime) + "\n";
+}
+bool gfx_headstart_device_warm_needed() {
+    const std::string id = device_warm_identity();
+    if (id.empty()) return false;
+    char buf[64] = {};
+    if (FILE* f = fopen(device_warm_marker().c_str(), "r")) {
+        fread(buf, 1, sizeof buf - 1, f);
+        fclose(f);
+    }
+    return id != buf;
+}
+void gfx_headstart_device_warm_done(bool ok) {
+    // a partial result still counts: what failed compiles on demand, and preparing again would not help
+    (void)ok;
+    const std::string id = device_warm_identity();
+    if (FILE* f = fopen(device_warm_marker().c_str(), "w")) {
+        fputs(id.c_str(), f);
+        fclose(f);
+    }
+}

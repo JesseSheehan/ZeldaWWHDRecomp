@@ -13,8 +13,10 @@
 //
 // Two windows: the TV picture (with the settings overlay) and the GamePad screen. The GamePad screen
 // modes are the desktop's (display_modes.h); in window mode a closed GamePad window falls back to the
-// picture-in-picture. Game controllers through GameController.framework, settings in NSUserDefaults.
-// No keyboard, mouse or file panels yet.
+// picture-in-picture. Game controllers through GameController.framework, settings in NSUserDefaults,
+// typed text with the system keyboard (text_input.mm). While the app is not in front (headset off, Home,
+// another app) the game is paused, after a "Last session" state (app_pause.h, below). No mouse or file
+// panels yet.
 #import <GameController/GameController.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -32,6 +34,7 @@
 #include "gfx/display_modes.h"
 #include "gfx/metal.h"
 #include "gfx/renderer.h"
+#include "gfx/warm_progress.h"
 #include "gx2/gx2.h"
 #include "guest_addr.h"
 #include "input.h"
@@ -45,6 +48,13 @@
 #include "overlay/overlay.h"
 #include "overlay/release_gate.h"
 #include "runtime.h"
+#include "app_pause.h"
+#include "savestate.h"
+
+namespace visionos {
+void text_input_init(UIView* view);  // text_input.mm
+void text_input_poll();
+}  // namespace visionos
 
 namespace gfx {
 extern Renderer R;
@@ -314,6 +324,31 @@ static void load_graphics_options() {
     if (saved_float("fps60Paced", v)) interp::load_paced_interpolation_at(60, v != 0);
 }
 
+// ---------------------------------------------------------------- pause and resume (app_pause.h)
+// Not in front: write the "Last session" state (savestate.h, slot 110: Link's place and progress; the
+// game's own saves are untouched) while the game still runs, then pause it. "resumePending" tells the
+// app's next start that this state is newer than what the player last saw, if the system ends the app
+// in the background meanwhile; coming back clears it.
+static void app_inactive() {
+    if (app_pause::paused()) return;
+    const bool saved = ss::save_last_session(1000);
+    set_host_setting("resumePending", saved ? "1" : "0");
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    app_pause::request(true);
+    LOG("[visionos] app inactive: pausing the game (last session state %s)", saved ? "written" : "not written");
+}
+static void app_active() {
+    set_host_setting("resumePending", "0");
+    app_pause::request(false);
+}
+static void lifecycle_init() {
+    NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
+    [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification*) { app_inactive(); }];
+    [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification*) { app_active(); }];
+}
+
 // Metal renderer start-up (metal_main.mm): the app's layer, input, the presentation pipelines
 void display_init() {
     if (!g_layer) fatal("visionOS: no layer (wwhd_visionos_set_layer before wwhd_runtime_main)");
@@ -340,6 +375,9 @@ void display_init() {
     sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear;
     sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
     R.linearClamp = [R.device newSamplerStateWithDescriptor:sd];
+    if (UIView* view = [g_layer.delegate isKindOfClass:[UIView class]] ? (UIView*)g_layer.delegate : nil)
+        visionos::text_input_init(view);
+    lifecycle_init();
     LOG("[visionos] display ready (%.0fx%.0f)", g_layer.drawableSize.width, g_layer.drawableSize.height);
 }
 
@@ -553,9 +591,12 @@ void init() {
             LOG("[input] buttons %04X (stick L %.2f %.2f, R %.2f %.2f)", s.buttons, s.lx, s.ly, s.rx, s.ry);
             last_buttons = s.buttons;
         }
-        std::lock_guard<std::mutex> lk(g_mu);
-        g_pad = s;
-        std::copy(v, v + input_map::kPadCount, g_host_values);
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            g_pad = s;
+            std::copy(v, v + input_map::kPadCount, g_host_values);
+        }
+        visionos::text_input_poll();
     }];
 }
 
@@ -576,11 +617,6 @@ PadState read() {
         mods::quick_use_filter_pad(s);
     }
     return s;
-}
-
-void prompt_text(const std::u16string& initial, int, std::function<void(bool ok, std::u16string text)> done) {
-    // no text prompt yet: the game's name entry keeps its default
-    dispatch_async(dispatch_get_main_queue(), ^{ done(false, initial); });
 }
 
 }  // namespace input
@@ -625,3 +661,10 @@ extern "C" void wwhd_visionos_toggle_settings() { overlay::set_open(!overlay::is
 // which version of the game this app's recompiled code is (the app checks an imported game against it)
 extern "C" const char* wwhd_visionos_build_name() { return g_guest_build_name; }
 extern "C" const char* wwhd_visionos_build_title_id() { return g_guest_build_title_id; }
+
+// the first start's shader preparation (main.cpp): 1 while it runs, with how far it is (0..1)
+extern "C" int wwhd_visionos_shader_progress(double* fraction) {
+    const size_t total = warmprogress::latest_total.load(), done = warmprogress::latest_done.load();
+    if (fraction) *fraction = total ? double(done) / double(total) : 0.0;
+    return total && done < total ? 1 : 0;
+}

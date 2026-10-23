@@ -559,6 +559,17 @@ int target_frames() {
     return kTarget;
 }
 
+void set_paused(bool paused) {
+    if (!g_unit)
+        return;
+#if defined(__APPLE__) && !defined(WWHD_SDL_HOST)
+    const bool ok = (paused ? AudioOutputUnitStop(g_unit) : AudioOutputUnitStart(g_unit)) == noErr;
+#else
+    const bool ok = paused ? SDL_PauseAudioStreamDevice(g_unit) : SDL_ResumeAudioStreamDevice(g_unit);
+#endif
+    LOG("[audio] output %s%s", paused ? "paused" : "resumed", ok ? "" : " (the device refused)");
+}
+
 void flush() {
     g_flush = true;
     guestmods::pcm::store().reset();

@@ -36,6 +36,7 @@ int buffered_frames();                          // frames queued for the device
 int target_frames();                            // latency the producer should aim for
 void stats(uint64_t& underrun, uint64_t& dropped);  // frames of silence inserted / frames discarded
 void finish_dump();                             // finalise recording (also called at process exit)
+void set_paused(bool paused);                    // stop / restart the device (the app is paused); the queue stays
 void flush();                                   // drop device queue and invalidate guest PCM streams (state/device reset)
 
 }  // namespace audio

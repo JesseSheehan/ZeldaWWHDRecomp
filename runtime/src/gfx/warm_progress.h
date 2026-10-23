@@ -3,8 +3,10 @@
 //  - setup (tools/installer/shader_prebuild.py) reads "WWHD-PROGRESS <done> <total> <detail>"
 //    lines on stdout;
 //  - Android's ShaderPrepareActivity polls WWHD_WARM_PROGRESS_FILE, which holds the latest
-//    "<done> <total> <detail>" line (replaced atomically).
+//    "<done> <total> <detail>" line (replaced atomically);
+//  - the visionOS app reads latest_done / latest_total (wwhd_visionos_shader_progress).
 // At most ~10 reports per second; only the warm paths call it, never normal play.
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -22,10 +24,14 @@ inline std::string count(size_t value) {
     return out;
 }
 
+inline std::atomic<size_t> latest_done{0}, latest_total{0};  // 0 / 0: not warming
+
 inline void report(size_t done, size_t total, const std::string& what, bool force = false) {
     static std::chrono::steady_clock::time_point last{};
     const auto now = std::chrono::steady_clock::now();
     if (done > total) done = total;
+    latest_total = total;
+    latest_done = done;
     if (!force && done < total && now - last < std::chrono::milliseconds(100)) return;
     last = now;
     const std::string line = std::to_string(done) + " " + std::to_string(total) + " " +

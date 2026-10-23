@@ -38,10 +38,17 @@ code, game data or keys, and nothing you build from it may be shared.
    ```
 
    It checks the tools, extracts the game (`--image` / `--archive`, into `build-visionos/game`), checks that
-   `cking.rpx` is a version the port supports, recompiles it, and builds the runtime for visionOS (about 10
-   minutes the first time). Keys are read from the files you name (or `--keys-stdin`) and never printed or
+   `cking.rpx` is a version the port supports, recompiles it, builds the runtime for visionOS (about 10
+   minutes the first time), and prepares the **shader head start** (below). Keys are read from the files you name (or `--keys-stdin`) and never printed or
    stored. Everything goes into `build-visionos/`, which git ignores: it is derived from your game, so never
    commit or share it.
+
+   **Shaders**: the desktop release's setup prepares the game's shaders ahead so new areas don't stutter;
+   `build.sh` does the same for the app. It needs the code-free shader template from a desktop release
+   (`tools/shadercache/template.bin` in the release folder): put it at `tools/shadercache/template.bin` in
+   this repository (git ignores it), or pass `--shader-template /path/to/template.bin`. It writes
+   `shadercache/headstart.bin` (about 90 MB) into the game folder, so it is imported with the game.
+   Without a template the step is skipped (`--no-shaders` skips it too) and shaders compile while you play.
 
 3. **Signing**: copy `visionos/Local.xcconfig.example` to `visionos/Local.xcconfig` and put your team ID in it
    (Xcode > Settings > Accounts). That file stays on your Mac (git ignores it).
@@ -91,6 +98,19 @@ game folder, and the other way round.
   (picture-in-picture). Look at the GamePad window and pinch to touch it (the map, the items screen).
   Settings > Display chooses another GamePad screen mode (picture-in-picture, automatic, off, GamePad only).
 - **Gear button** below either window: the settings menu, without the controller.
+- **First start**: with a shader head start in the game folder, the app compiles it once before the game
+  starts (*Preparing shaders*, with a progress bar). visionOS keeps the compiled shaders, so later starts
+  are quick; if the system clears the app's caches, the app prepares them again on its next start.
+- **Typing**: when the game asks for text (the name of a new save file), its on-screen keyboard shows as
+  usual and works with the controller alone; the visionOS keyboard comes up with it, and what you type
+  there (or on a paired keyboard) goes into the name. Text fields in the settings menu open a system text
+  box.
+- **Pause and resume**: when the app leaves the front (headset off, the Home View, another app in front),
+  the game pauses, sound and game time included, and continues where it was when you come back. Before
+  pausing, during play, it writes a *Last session* state (the save states' Last session slot; a few KB, separate from
+  your saved games, which it never touches). If visionOS ends the app meanwhile, the next start asks
+  **Resume where you left off?**: choose *Resume*, then your Quest Log on the title screen, and the game
+  continues from that moment; *Start as Usual* ignores it.
 - Your saves are in the app's storage (`Documents/save`); the app's log is `Documents/captures/wwhd.log`.
 
 ### Recommended settings
@@ -119,6 +139,12 @@ The display runs at 90 Hz, so 60 fps is close to, but not perfectly, even.
 - **"This app was built for the … version"**: the imported game is another version than the one you built.
   Rebuild with that game (`tools/visionos/build.sh`) or import the matching one.
 - **Signing errors**: check `visionos/Local.xcconfig` (team ID), and that Xcode is signed in to that team.
+- **Stutters in new areas**: the game folder you imported has no `shadercache/headstart.bin` (build it with
+  `build.sh` and a shader template, then import the folder again), or *Preparing shaders* was interrupted
+  (it runs again at the next start).
+- **Simulator**: the app also runs in the visionOS simulator, for testing. Configure a second build directory
+  with `-DCMAKE_OSX_SYSROOT=xrsimulator` (as `build.sh` does for the device), and point simulator builds at it
+  in `visionos/Local.xcconfig`: `WWHD_RUNTIME_BUILD[sdk=xrsimulator*] = /path/to/that/build`.
 
 ## How the visionOS port works
 
@@ -127,6 +153,18 @@ the runtime is a static library that the SwiftUI app links (`CMAKE_SYSTEM_NAME=v
 and input host is `runtime/src/platform/visionos/host.mm` instead of the AppKit one, the game's 4 GiB address
 space sits at 0x7000000000 (visionOS reserves the lower addresses; `tools/visionos/memprobe` measured it), and
 it is reserved before `main()` so nothing else lands there first.
+
+- **Shaders**: the head start is the desktop's (`tools/shaderprep.py`, `runtime/src/gfx/shader_headstart.mm`),
+  read from `<game>/shadercache/headstart.bin`. visionOS has no setup step, so the first start runs the
+  desktop's `--warm-shaders` compile in-process before the game thread starts (`main.cpp`), and a marker in
+  `Library/Caches/wwhd` records which head start that was. Metal binary archives can't be made on the Mac
+  ahead of time: the runtime generates its Metal shaders from the game's GPU code while it runs, so there is
+  no shader library to compile offline, and visionOS's own shader cache plays that part after the first start.
+- **Text**: `runtime/src/platform/visionos/text_input.mm`, the counterpart of `gfx/text_input_appkit.mm`.
+- **Pause**: `runtime/src/app_pause.cpp` stops the game's main thread at a frame boundary, freezes the other
+  guest threads as a save state does, stops the audio device, and on resume sets the guest clock back to
+  where it stopped. The host (`host.mm`) asks for it when the app resigns active, after
+  `ss::save_last_session`.
 
 ## Legal
 

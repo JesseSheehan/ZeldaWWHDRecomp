@@ -36,14 +36,22 @@ struct TVWindow: View {
     @Environment(\.dismissWindow) private var dismissWindow
     private let gamepad = GamePadWindowState.shared
     private let library = GameLibrary.shared
+    private let resume = ResumeOffer.shared
 
     var body: some View {
-        if library.state == .ready { game } else { ImportView().frame(minWidth: 960, minHeight: 540) }
+        if library.state != .ready {
+            ImportView().frame(minWidth: 960, minHeight: 540)
+        } else if resume.pending {
+            ResumeView().frame(minWidth: 960, minHeight: 540)
+        } else {
+            game
+        }
     }
 
     private var game: some View {
         MetalLayerView { GameLayerView() }
             .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .overlay { ShaderPreparationView() }
             .onAppear {
                 // Start (+) brings the GamePad window back: the game shows its menus there
                 StartButtonWatcher.shared.onPress = { [openWindow] in
@@ -68,6 +76,81 @@ struct TVWindow: View {
 
 extension TVWindow {
     private func openGamePad() { openWindow(id: "gamepad", value: GamePadWindowState.value) }
+}
+
+/// The app was ended in the background (the system needed the memory, or the headset was off a long
+/// time): the runtime wrote a "Last session" state when the app left the front (host.mm), so the next
+/// start offers to continue from it. Asked before the runtime starts: it picks the at-start choice.
+@Observable final class ResumeOffer {
+    static let shared = ResumeOffer()
+    private static let key = "wwhd.resumePending"
+    var pending = UserDefaults.standard.string(forKey: ResumeOffer.key) == "1"
+
+    func answer(_ resume: Bool) {
+        // savestate.cpp: "last" loads the Last session state once a Quest Log is being played;
+        // "intro" starts as usual this time (the at-start setting itself is not changed)
+        setenv("WWHD_AT_START", resume ? "last" : "intro", 1)
+        UserDefaults.standard.set("0", forKey: ResumeOffer.key)
+        pending = false
+    }
+}
+
+struct ResumeView: View {
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "arrow.uturn.forward.circle").font(.system(size: 56))
+            Text("Resume where you left off?").font(.largeTitle)
+            Text("The app was closed while you were away. Choose your Quest Log on the title screen and the game continues from the moment you left. Your saved games are not changed either way.")
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 560)
+            HStack(spacing: 16) {
+                Button("Start as Usual") { ResumeOffer.shared.answer(false) }
+                Button("Resume") { ResumeOffer.shared.answer(true) }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(40)
+    }
+}
+
+/// The first start with a shader head start compiles it before the game starts (main.cpp): its progress,
+/// over the still black game picture.
+struct ShaderPreparationView: View {
+    @State private var fraction: Double?
+
+    var body: some View {
+        ZStack {
+            if let fraction {
+                VStack(spacing: 16) {
+                    Text("Preparing shaders").font(.title)
+                    Text("Only the first time: this keeps new areas from stuttering later.")
+                        .foregroundStyle(.secondary)
+                    ProgressView(value: fraction).frame(maxWidth: 420)
+                    Text("\(Int(fraction * 100)) %").monospacedDigit()
+                }
+                .padding(32)
+                .glassBackgroundEffect()
+            }
+        }
+        .task {
+            // the runtime reports progress for a few seconds to minutes; nothing to poll after that
+            var seen = false
+            while !Task.isCancelled {
+                var f = 0.0
+                if wwhd_visionos_shader_progress(&f) != 0 {
+                    seen = true
+                    fraction = f
+                } else {
+                    fraction = nil
+                    if seen { break }
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+                if !seen, Date().timeIntervalSince(started) > 30 { break }
+            }
+        }
+    }
+
+    private let started = Date()
 }
 
 /// Calls onPress when Start (+, Menu) is pressed on any game controller. The runtime polls the controllers

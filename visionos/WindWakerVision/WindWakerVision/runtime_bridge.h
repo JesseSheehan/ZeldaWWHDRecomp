@@ -15,6 +15,8 @@ void wwhd_visionos_toggle_settings(void);
 // the version of the game the app was built for: "USA", "EU", ...; its title id (16 hex digits)
 const char* wwhd_visionos_build_name(void);
 const char* wwhd_visionos_build_title_id(void);
+// the first start's shader preparation: 1 while it runs, *fraction how far (0..1)
+int wwhd_visionos_shader_progress(double* fraction);
 #ifdef __cplusplus
 }
 #endif

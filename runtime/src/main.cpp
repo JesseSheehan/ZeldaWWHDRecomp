@@ -73,6 +73,10 @@ namespace gx2 { void shutdown_vulkan_caches(); }
 #endif
 #ifdef WWHD_HAS_METAL
 int gfx_headstart_warm();  // gfx/shader_headstart.mm
+#ifdef WWHD_VISIONOS
+bool gfx_headstart_device_warm_needed();  // gfx/shader_headstart.mm
+void gfx_headstart_device_warm_done(bool ok);
+#endif
 #endif
 
 void mem_setup_heaps(uint32_t data_end);
@@ -661,6 +665,23 @@ int main(int argc, char** argv) {
     }
     static LoadedModule mod = m;
     static uint32_t args = argv_arr;
+#ifdef WWHD_VISIONOS
+    // visionOS: the first start with a shader head start (tools/visionos/build.sh puts it in the game
+    // folder) compiles all of it before the game starts, as setup's preparation does on the desktop; the
+    // system keeps the compiled code, so later starts replay it quickly. On a thread of its own: this
+    // one is the app's main thread, which shows the progress (wwhd_visionos_shader_progress).
+    if (!own_shader_caches && render::active() == render::Api::Metal && gfx_headstart_device_warm_needed()) {
+        std::thread([] {
+            LOG("[shaders] first start with this shader head start: preparing the shaders before the game starts");
+            const int result = gfx_headstart_warm();
+            gfx_headstart_device_warm_done(result == 0);
+            threads::run_main(mod, 1, args);
+            LOG("[boot] game main thread returned");
+            std::exit(0);
+        }).detach();
+        return 0;
+    }
+#endif
     std::thread([] {
         threads::run_main(mod, 1, args);
         LOG("[boot] game main thread returned");
