@@ -144,7 +144,8 @@ struct TheaterSpace: View {
     private let gamepad = GamePadWindowState.shared
     @State private var screen = Entity()
     @State private var world = Entity()
-    @State private var reflection = Entity()
+    @State private var reflection = Entity()  // its strips (reflectionStrips)
+    @State private var reflectionLook: UnlitMaterial?
     @State private var controls: Entity?
     @State private var frames: EventSubscription?
     @State private var animation = Animation()
@@ -172,7 +173,8 @@ struct TheaterSpace: View {
             content.add(world)
             // the screen's reflection in the sea: the same texture (no copy), darker, fading with depth
             if let texture {
-                reflection.components.set(ModelComponent(mesh: Self.reflectionMesh(theater.size), materials: [Self.reflectionMaterial(texture)]))
+                reflectionLook = Self.reflectionMaterial(texture)
+                Self.reflectionStrips(reflection, theater.size, reflectionLook!)
                 world.addChild(reflection)
             }
             // the game's own waves, clouds and sun, from the game folder (GameScenery), once decoded
@@ -181,15 +183,18 @@ struct TheaterSpace: View {
                 let pictures = GameScenery.load(gameFolder: folder)
                 await MainActor.run { animation.scenery = GameScenery.build(pictures, into: world, seaLevel: Self.seaLevel) }
             }
-            let reflection = reflection
+            let reflection = reflection, sky = SkyClock(world: world)
             frames = content.subscribe(to: SceneEvents.Update.self) { _ in
                 let t = Date().timeIntervalSince(animation.start)
                 animation.scenery(t)
-                // the reflection sways a little, as on moving water
-                if var model = reflection.components[ModelComponent.self], var m = model.materials.first as? UnlitMaterial {
-                    m.textureCoordinateTransform = .init(offset: [Float(sin(t * 1.7)) * 0.004, Float(sin(t * 1.1)) * 0.006])
+                sky.update()
+                // the reflection on moving water: each strip sways on its own, so the picture breaks up
+                for (i, strip) in reflection.children.enumerated() {
+                    guard var model = strip.components[ModelComponent.self], var m = model.materials.first as? UnlitMaterial else { continue }
+                    let phase = t * 1.4 + Double(i) * 0.9
+                    m.textureCoordinateTransform = .init(offset: [Float(sin(phase)) * 0.008 + Float(sin(phase * 0.37)) * 0.005, 0])
                     model.materials = [m]
-                    reflection.components.set(model)
+                    strip.components.set(model)
                 }
             }
             if let panel = attachments.entity(for: "controls") {
@@ -227,10 +232,7 @@ struct TheaterSpace: View {
             m.mesh = Self.screenMesh(size, onSea: onSea)
             screen.components.set(m)
             screen.name = key
-            if var r = reflection.components[ModelComponent.self] {
-                r.mesh = Self.reflectionMesh(size)
-                reflection.components.set(r)
-            }
+            if let look = reflectionLook { Self.reflectionStrips(reflection, size, look) }
         }
         if let controls {
             if onSea {
@@ -266,12 +268,27 @@ struct TheaterSpace: View {
 
     /// The screen mirrored in the sea, laid onto the water's surface as the eyes (about 1.2 m up, seated)
     /// see it: each mirrored point is moved along its line of sight to just above the water.
-    static func reflectionMesh(_ size: Theater.Size) -> MeshResource {
+    static func reflectionMesh(_ size: Theater.Size, rows: ClosedRange<Float> = 0...1) -> MeshResource {
         let eye: Float = 1.2, surface = seaLevel + 0.005
-        return curvedMesh(size, onSea: true, name: "reflection") { p in
+        return curvedMesh(size, onSea: true, name: "reflection", rows: rows) { p in
             let mirrored = SIMD3<Float>(p.x, 2 * seaLevel - p.y, p.z)
             let t = (eye - surface) / (eye - mirrored.y)
             return SIMD3<Float>(0, eye, 0) + t * (mirrored - SIMD3<Float>(0, eye, 0))
+        }
+    }
+
+    /// The reflection as strips across the water with gaps between them (the sea showing through), each
+    /// swaying on its own each frame: the toon look of a picture reflected in waves. 22 small draws.
+    static func reflectionStrips(_ parent: Entity, _ size: Theater.Size, _ look: UnlitMaterial) {
+        parent.children.removeAll()
+        let count = 22
+        for i in 0..<count {
+            // near the waterline (v = 0: the picture's bottom, far away) the strips are long, toward the
+            // viewer the gaps grow
+            let v0 = Float(i) / Float(count), gap = 0.12 + 0.3 * v0
+            let v1 = v0 + (1 - gap) / Float(count)
+            let strip = ModelEntity(mesh: reflectionMesh(size, rows: v0...v1), materials: [look])
+            parent.addChild(strip)
         }
     }
 
@@ -297,20 +314,21 @@ struct TheaterSpace: View {
     }
 
     /// The screen's curved quad strip; `place` moves each vertex (the reflection lays it onto the sea).
-    private static func curvedMesh(_ size: Theater.Size, onSea: Bool, name: String, place: (SIMD3<Float>) -> SIMD3<Float>) -> MeshResource {
+    private static func curvedMesh(_ size: Theater.Size, onSea: Bool, name: String, rows: ClosedRange<Float> = 0...1,
+                                   place: (SIMD3<Float>) -> SIMD3<Float>) -> MeshResource {
         let r = size.distance, w = size.width, h = w * 9 / 16
-        let centerY = layout(size, onSea: onSea).center
+        let centerY = layout(size, onSea: onSea).center, bottomY = centerY - h / 2
         let span = w / r, columns = 48
         var positions: [SIMD3<Float>] = [], normals: [SIMD3<Float>] = [], uvs: [SIMD2<Float>] = []
         var indices: [UInt32] = []
         for i in 0...columns {
             let u = Float(i) / Float(columns), a = (u - 0.5) * span
             let x = r * sin(a), z = -r * cos(a)
-            for (row, y) in [(0, centerY + h / 2), (1, centerY - h / 2)] {
-                let p = place([x, y, z])
+            for v in [rows.upperBound, rows.lowerBound] {
+                let p = place([x, bottomY + v * h, z])
                 positions.append(p)
-                normals.append(p.y < centerY - h / 2 ? [0, 1, 0] : [-sin(a), 0, cos(a)])
-                uvs.append([u, row == 0 ? 1 : 0])
+                normals.append(p.y < bottomY ? [0, 1, 0] : [-sin(a), 0, cos(a)])
+                uvs.append([u, v])
             }
         }
         for i in 0..<UInt32(columns) {
@@ -342,6 +360,7 @@ struct TheaterSpace: View {
             sky.model?.materials = [m]
         }
         sky.scale = [-1, 1, 1]
+        sky.name = "sky"
         world.addChild(sky)
 
         // sun (the game's replaces it: GameScenery)
@@ -353,6 +372,7 @@ struct TheaterSpace: View {
         // the sea, and a little round deck to stand on
         let sea = ModelEntity(mesh: .generatePlane(width: 400, depth: 400), materials: [unlit(UIColor(red: 0.10, green: 0.45, blue: 0.70, alpha: 1))])
         sea.position = [0, seaLevel, 0]
+        sea.name = "sea"
         world.addChild(sea)
         let foam = ModelEntity(mesh: .generateCylinder(height: 0.02, radius: 1.9), materials: [unlit(UIColor(white: 0.95, alpha: 1))])
         foam.position = [0, -0.59, 0]
@@ -392,18 +412,24 @@ struct TheaterSpace: View {
         return world
     }
 
-    private static func skyGradient() -> CGImage {
+    /// The sky dome's picture: `zenith` overhead blending into `horizon` at the horizon (SkyClock sets the
+    /// colours through the day), a little darker below it.
+    static func skyGradient(zenith: SIMD3<Float> = [0.25, 0.52, 0.93], horizon: SIMD3<Float> = [0.80, 0.90, 0.99]) -> CGImage {
         let h = 256
         var pixels = [UInt8](repeating: 255, count: h * 4)
         for y in 0..<h {
             // image row 0 is the top of the texture: the sphere's top (the zenith)
             let t = Float(y) / Float(h - 1)  // 0 zenith .. 1 nadir
-            let horizon = max(0, 1 - abs(t - 0.5) * 6)  // a pale band at the horizon
-            let up = t < 0.5 ? 1 - t * 2 : 0
-            let r = 0.35 + 0.5 * horizon - 0.15 * up, g = 0.62 + 0.3 * horizon - 0.1 * up, b = 0.95 + 0.05 * horizon
-            pixels[y * 4] = UInt8(min(1, r) * 255)
-            pixels[y * 4 + 1] = UInt8(min(1, g) * 255)
-            pixels[y * 4 + 2] = UInt8(min(1, b) * 255)
+            let c: SIMD3<Float>
+            if t < 0.5 {
+                let f = pow(t * 2, 2.2)  // most of the sky keeps the zenith colour, the horizon colour near it
+                c = zenith + (horizon - zenith) * f
+            } else {
+                c = horizon * (1 - (t - 0.5) * 0.6)
+            }
+            pixels[y * 4] = UInt8(min(1, max(0, c.x)) * 255)
+            pixels[y * 4 + 1] = UInt8(min(1, max(0, c.y)) * 255)
+            pixels[y * 4 + 2] = UInt8(min(1, max(0, c.z)) * 255)
         }
         return image(width: 1, height: h, pixels: pixels)
     }
@@ -426,7 +452,7 @@ struct TheaterSpace: View {
         image(width: 16, height: 9, pixels: [UInt8]((0..<16 * 9).flatMap { _ in [red, green, blue, 255] }))
     }
 
-    private static func image(width: Int, height: Int, pixels: [UInt8]) -> CGImage {
+    static func image(width: Int, height: Int, pixels: [UInt8]) -> CGImage {
         let data = CFDataCreate(nil, pixels, pixels.count)!
         return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
                        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),

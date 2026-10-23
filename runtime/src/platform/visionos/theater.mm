@@ -14,6 +14,7 @@
 #include <functional>
 #include <mutex>
 
+#include "guest_addr.h"
 #include "imgui.h"
 #include "overlay/extensions.h"
 #include "overlay/hostui.h"
@@ -32,6 +33,7 @@ static wwhd_theater_present_fn g_present;
 static int g_width, g_height;  // the theater texture's size
 static std::atomic<wwhd_theater_action_fn> g_action{nullptr};
 static std::atomic<int> g_active{0}, g_size{1}, g_environment{0};
+static std::atomic<bool> g_game_memory{false};  // the game's memory is set up (theater_init ran)
 
 // any thread: theater mode is on, and the size of its texture
 bool theater_size(int& w, int& h) {
@@ -84,6 +86,7 @@ void theater_init() {
     tab.name = "Full Screen";
     tab.draw = draw_tab;
     overlay::ext::add_tab(std::move(tab), "audio");
+    g_game_memory = true;
 }
 
 }  // namespace visionos
@@ -108,4 +111,14 @@ extern "C" void wwhd_visionos_theater_state(int active, int size, int environmen
     visionos::g_active = active;
     visionos::g_size = size;
     visionos::g_environment = environment;
+}
+
+// The game's time of day in degrees (0..360, 15 per hour), or -1 before the game is up: dSv_info_c (the
+// save base, d_com_inf_game) +0x44, as mods/story_notebook.cpp reads it. Full Screen's sky follows it.
+extern "C" double wwhd_visionos_time_of_day() {
+    if (!visionos::g_game_memory.load()) return -1;
+    const uint32_t base = ld32(GD(0x101F84DC));
+    if (!base) return -1;
+    const float degrees = u32_as_f32(ld32(base + 0x44));
+    return degrees >= 0 && degrees <= 360 ? degrees : -1;
 }
