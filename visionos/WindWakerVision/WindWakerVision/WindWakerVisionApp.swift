@@ -151,7 +151,8 @@ struct GameView: View {
 
     var body: some View {
         ZStack {
-            MetalLayerView { view }
+            // (hidden, not removed, while the 3D screen shows: the two at one depth flickered)
+            MetalLayerView { view }.opacity(stereo && !Theater.shared.active ? 0 : 1)
             if stereo, !Theater.shared.active { StereoWindowScreen() }
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
@@ -175,7 +176,6 @@ struct StereoWindowScreen: View {
     @State private var state = Holder()
 
     final class Holder {
-        var picture: ScreenPicture?
         var frames: EventSubscription?
         var size = CGSize.zero
     }
@@ -184,9 +184,8 @@ struct StereoWindowScreen: View {
         GeometryReader { geometry in
             RealityView { content in
                 content.add(screen)
-                state.picture = ScreenPicture(screen: screen, reflection: Entity(), pattern: false)
-                let state = state
-                state.frames = content.subscribe(to: SceneEvents.Update.self) { _ in state.picture?.check() }
+                ScreenPicture.shared.attach(screen: screen, reflection: nil, pattern: false, owner: state)
+                state.frames = content.subscribe(to: SceneEvents.Update.self) { _ in ScreenPicture.shared.check() }
             } update: { _ in
                 // the screen fills the view (points to metres)
                 guard geometry.size != state.size, geometry.size.width > 0 else { return }
@@ -198,7 +197,11 @@ struct StereoWindowScreen: View {
                 }
             }
         }
-        .onDisappear { state.picture?.release() }
+        .onDisappear {
+            state.frames?.cancel()
+            state.frames = nil
+            ScreenPicture.shared.detach(owner: state)
+        }
     }
 }
 

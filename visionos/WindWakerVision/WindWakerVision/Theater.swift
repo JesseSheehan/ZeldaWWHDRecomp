@@ -104,13 +104,9 @@ enum TheaterOutput {
     /// queues just replaced (3D switched): RealityKit still finishes presenting their last frames on the
     /// GPU's completion, after the runtime let go of them; freeing them at once crashed in that handler
     private static var retired: [(TextureResource.DrawableQueue, Date)] = []
-    /// who shows the picture now (a ScreenPicture: Full Screen's, or the game window's in 3D); a stop by
-    /// another one changes nothing (the window's goes as Full Screen's starts, and the other way round)
-    private static var owner: ObjectIdentifier?
 
     /// `stereo`: 3D, both eyes side by side (twice as wide)
-    @MainActor static func start(on texture: TextureResource, stereo: Bool = false, owner: ObjectIdentifier? = nil) throws {
-        self.owner = owner
+    @MainActor static func start(on texture: TextureResource, stereo: Bool = false) throws {
         var w: Int32 = 0, h: Int32 = 0
         wwhd_visionos_tv_picture_size(&w, &h)
         let eye = min(3840, max(2560, Int(w)))
@@ -125,9 +121,7 @@ enum TheaterOutput {
         wwhd_visionos_set_theater(next, present, Int32(width), Int32(height))
     }
 
-    static func stop(owner: ObjectIdentifier? = nil) {
-        if let owner, owner != self.owner { return }
-        self.owner = nil
+    static func stop() {
         wwhd_visionos_set_theater(nil, nil, 0, 0)  // returns once no frame is being drawn into it
         lock.withLock {
             let now = Date()
@@ -155,27 +149,42 @@ enum TheaterOutput {
     }
 }
 
-/// The screen's picture in 2D or in 3D (Settings > Vision Pro > 3D): its texture and the screen's and the
-/// reflection's materials. In 3D the texture holds both eyes side by side and the screen's material
-/// (Resources/StereoScreen.usda) shows each eye its half; the reflection shows the left one. Follows the
-/// setting live (check, every frame: one flag read).
+/// The screen's picture in 2D or in 3D (Settings > Vision Pro > 3D), for whichever screen shows it now:
+/// Full Screen's or the game window's in 3D. One for the app (two, one per view, fought over the one
+/// texture and the picture flashed): a view attaches its screen (and reflection) when it appears and
+/// detaches when it goes; only the screen attached last gets the picture. In 3D the texture holds both eyes
+/// side by side and the screen's material (Resources/StereoScreen.usda) shows each eye its half; the
+/// reflection shows the left one. Follows the setting live (check, every frame: one flag read).
 @MainActor final class ScreenPicture {
+    static let shared = ScreenPicture()
     private(set) var stereo = false
     private(set) var reflectionScaleX: Float = 1
     private var stereoLook: ShaderGraphMaterial?
     private var loading = false
-    private let screen: Entity, reflection: Entity
-    private let pattern: Bool
+    private var screen: Entity?, reflection: Entity?
+    private var owner: ObjectIdentifier?
+    private var pattern = false
 
-    init(screen: Entity, reflection: Entity, pattern: Bool) {
+    func attach(screen: Entity, reflection: Entity?, pattern: Bool, owner: AnyObject) {
         self.screen = screen
         self.reflection = reflection
         self.pattern = pattern
+        self.owner = ObjectIdentifier(owner)
         build(stereo: false)
+        check()
+    }
+
+    func detach(owner: AnyObject) {
+        guard self.owner == ObjectIdentifier(owner) else { return }  // (another view has the picture now)
+        self.owner = nil
+        screen = nil
+        reflection = nil
+        if !pattern { TheaterOutput.stop() }
+        stereo = false
     }
 
     func check() {
-        guard !pattern else { return }
+        guard !pattern, screen != nil else { return }
         let wanted = wwhd_visionos_depth3d() != 0
         guard wanted != stereo else { return }
         if wanted && stereoLook == nil {
@@ -193,10 +202,11 @@ enum TheaterOutput {
     }
 
     private func build(stereo: Bool) {
-        if !pattern { TheaterOutput.stop(owner: ObjectIdentifier(self)) }
+        guard let screen else { return }
+        if !pattern { TheaterOutput.stop() }
         guard let texture = try? TextureResource(image: pattern ? TheaterSpace.colorBars() : TheaterSpace.solid(red: 0, green: 0, blue: 0),
                                                  options: .init(semantic: .color)) else { return }
-        if !pattern { try? TheaterOutput.start(on: texture, stereo: stereo, owner: ObjectIdentifier(self)) }
+        if !pattern { try? TheaterOutput.start(on: texture, stereo: stereo) }
         var look: any RealityKit.Material
         if stereo, var m = stereoLook, (try? m.setParameter(name: "Picture", value: .textureResource(texture))) != nil {
             look = m
@@ -211,21 +221,15 @@ enum TheaterOutput {
         } else {
             screen.components.set(ModelComponent(mesh: .generatePlane(width: 1, height: 1), materials: [look]))
         }
-        for mirror in reflection.children {
-            guard var model = mirror.components[ModelComponent.self] else { continue }
-            model.materials = [TheaterSpace.reflectionMaterial(texture)]
-            mirror.components.set(model)
-        }
-        if reflection.children.isEmpty {
-            reflection.addChild(ModelEntity(mesh: .generatePlane(width: 1, height: 1), materials: [TheaterSpace.reflectionMaterial(texture)]))
+        if let reflection {
+            for mirror in reflection.children {
+                guard var model = mirror.components[ModelComponent.self] else { continue }
+                model.materials = [TheaterSpace.reflectionMaterial(texture)]
+                mirror.components.set(model)
+            }
         }
         reflectionScaleX = stereo ? 0.5 : 1
         self.stereo = stereo
-    }
-
-    /// The view that showed it goes: the runtime's picture stops coming here (if it still does).
-    func release() {
-        if !pattern { TheaterOutput.stop(owner: ObjectIdentifier(self)) }
     }
 }
 
@@ -246,7 +250,7 @@ struct TheaterSpace: View {
     /// What moves each frame: the game's scenery (GameScenery) and the reflection's ripple.
     final class Animation {
         var scenery: (Double) -> Void = { _ in }
-        var picture: ScreenPicture?
+        var shown = false  // (this space has attached its screen to ScreenPicture)
         let start = Date()
     }
 
@@ -262,7 +266,8 @@ struct TheaterSpace: View {
             reflection.addChild(ModelEntity(mesh: Self.reflectionMesh(theater.size), materials: []))
             world.addChild(reflection)
             // the picture on both, 2D or 3D (ScreenPicture)
-            animation.picture = ScreenPicture(screen: screen, reflection: reflection, pattern: pattern)
+            ScreenPicture.shared.attach(screen: screen, reflection: reflection, pattern: pattern, owner: animation)
+            animation.shown = true
             if ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"] == "stereo" { Self.testStereoMaterial(on: screen) }
             // the game's own waves, clouds and sun, from the game folder (GameScenery), once decoded
             let animation = animation, world = world, folder = GameLibrary.shared.gameFolder.path
@@ -275,9 +280,9 @@ struct TheaterSpace: View {
                 let t = Date().timeIntervalSince(animation.start)
                 animation.scenery(t)
                 sky.update()
-                animation.picture?.check()
+                ScreenPicture.shared.check()
                 // the reflection sways a little, as on moving water (in 3D it shows the left eye's half)
-                let scaleX = animation.picture?.reflectionScaleX ?? 1
+                let scaleX = ScreenPicture.shared.reflectionScaleX
                 for strip in reflection.children {
                     guard var model = strip.components[ModelComponent.self], var m = model.materials.first as? UnlitMaterial else { continue }
                     m.textureCoordinateTransform = .init(offset: [Float(sin(t * 1.7)) * 0.004, Float(sin(t * 1.1)) * 0.006],
@@ -304,7 +309,7 @@ struct TheaterSpace: View {
             WindowOpener.shared.dismissImmersiveSpace = dismissImmersiveSpace
         }
         .onDisappear {
-            animation.picture?.release()
+            ScreenPicture.shared.detach(owner: animation)
             Theater.shared.ended()
             // the TV window again, whoever closed the space
             if !TVWindowState.shared.open { openWindow(id: "tv", value: TVWindowState.value) }
