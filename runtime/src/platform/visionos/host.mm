@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
@@ -91,7 +92,11 @@ extern "C" int wwhd_visionos_reserve_memory() {
 
 namespace visionos {
 void text_input_attach(UIView* view);  // text_input.mm
+bool theater_size(int& w, int& h);      // theater.mm
+bool theater_frame(const std::function<void(id<MTLTexture>)>& compose, id<MTLCommandBuffer> cb);
+void theater_init();
 }
+static std::atomic<float> g_tv_density{2.0f};  // the TV window's display scale (the overlay's density there)
 static void configure_tv_layer(CAMetalLayer* l);
 
 extern "C" void wwhd_visionos_set_layer(void* layer) {
@@ -114,7 +119,9 @@ extern "C" void wwhd_visionos_set_drawable_size(double w, double h, double scale
     if (!g_layer) return;
     g_layer.contentsScale = scale;
     g_layer.drawableSize = CGSizeMake(std::max(1.0, w * scale), std::max(1.0, h * scale));
-    overlay::set_density((float)scale);
+    g_tv_density = (float)scale;
+    int tw, th;
+    if (!visionos::theater_size(tw, th)) overlay::set_density((float)scale);
 }
 
 namespace gfx {
@@ -409,6 +416,7 @@ void display_init() {
     if (UIView* view = [g_layer.delegate isKindOfClass:[UIView class]] ? (UIView*)g_layer.delegate : nil)
         visionos::text_input_init(view);
     lifecycle_init();
+    visionos::theater_init();
     g_display_ready = true;
     LOG("[visionos] display ready (%.0fx%.0f)", g_layer.drawableSize.width, g_layer.drawableSize.height);
 }
@@ -421,10 +429,19 @@ void present_screens() {
         std::lock_guard<std::mutex> lk(g_tv_mu);
         tv = scr.layer;
     }
-    // while the TV window is closed the overlay keeps the size it last had (it still runs: text prompt)
+    // while the TV window is closed the overlay keeps the size it last had (it still runs: text prompt);
+    // in theater mode the picture goes to the theater screen's texture, at its size (theater.mm)
     static CGSize last_size = CGSizeMake(1920, 1080);
     if (tv) last_size = tv.drawableSize;
     CGSize ls = last_size;
+    int theater_w = 0, theater_h = 0;
+    const bool theater = visionos::theater_size(theater_w, theater_h);
+    if (theater) ls = CGSizeMake(theater_w, theater_h);
+    static bool was_theater = false;
+    if (theater != was_theater) {  // the overlay as large on the screen as in the window (720 points high there)
+        was_theater = theater;
+        overlay::set_density(theater ? theater_h / 720.0f : g_tv_density.load());
+    }
     PresentPlan P = display_plan(R.tv.tex != nil, nominal_w(R.tv), nominal_h(R.tv), R.drc.tex != nil, nominal_w(R.drc),
                                  nominal_h(R.drc), ls.width, ls.height, R.frame);
     Layout L;
@@ -435,7 +452,9 @@ void present_screens() {
     L.scale = P.scale;
     if (overlay::guesthud::active()) overlay::guesthud::set_tv_region(P.tv.x, P.tv.y, P.tv.w, P.tv.h, !P.drc_only);
     g_overlay_draw = overlay::frame(P.dw, P.dh, overlay_metal_init);
-    if (tv && scr.tex) {
+    if (theater) {
+        visionos::theater_frame([&](id<MTLTexture> target) { compose_tv(target, L); }, command_buffer());
+    } else if (tv && scr.tex) {
         MTLPixelFormat want = scr.srgb ? MTLPixelFormatBGRA8Unorm_sRGB : MTLPixelFormatBGRA8Unorm;
         if (tv.pixelFormat != want) tv.pixelFormat = want;
         if (id<CAMetalDrawable> drawable = scr.visible ? [tv nextDrawable] : nil) {
@@ -631,7 +650,8 @@ void init() {
         for (int i = 0; i < 2; i++) {
             const int b = window_buttons[i];
             const bool down = v[b] > 0.5f;
-            if (down && !g_tv_open.load()) held_for_window[i] = true;
+            int tw, th;
+            if (down && !g_tv_open.load() && !visionos::theater_size(tw, th)) held_for_window[i] = true;
             if (!down) held_for_window[i] = false;
             if (held_for_window[i]) v[b] = game[b] = 0;
         }

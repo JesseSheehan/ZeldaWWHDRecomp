@@ -24,6 +24,14 @@ struct WindWakerVisionApp: App {
         }
         .defaultSize(width: 640, height: 360)
         .windowResizability(.contentSize)
+
+        // theater mode (Theater.swift): the TV picture on a big screen; sky and sea (progressive: the
+        // Digital Crown brings the room back in) or the room dimmed (mixed)
+        ImmersiveSpace(id: "theater") {
+            TheaterSpace()
+        }
+        .immersionStyle(selection: Binding(get: { Theater.shared.immersionStyle }, set: { _ in }),
+                        in: .mixed, .progressive)
     }
 }
 
@@ -47,6 +55,9 @@ struct WindWakerVisionApp: App {
 final class WindowOpener {
     static let shared = WindowOpener()
     var openWindow: OpenWindowAction?
+    var dismissWindow: DismissWindowAction?
+    var openImmersiveSpace: OpenImmersiveSpaceAction?
+    var dismissImmersiveSpace: DismissImmersiveSpaceAction?
 
     func openTV() { openWindow?(id: "tv", value: TVWindowState.value) }
     func openGamePad() { openWindow?(id: "gamepad", value: GamePadWindowState.value) }
@@ -55,7 +66,7 @@ final class WindowOpener {
     /// its menus there). − (Settings): the TV window if it is closed. While the TV window is closed the
     /// runtime keeps that press from the game and from Settings (host.mm).
     func buttonPressed(start: Bool) {
-        if !TVWindowState.shared.open { openTV() }
+        if !TVWindowState.shared.open, !Theater.shared.active { openTV() }
         else if start, !GamePadWindowState.shared.open { openGamePad() }
     }
 }
@@ -63,6 +74,8 @@ final class WindowOpener {
 struct TVWindow: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.scenePhase) private var scenePhase
     private let gamepad = GamePadWindowState.shared
     private let library = GameLibrary.shared
@@ -72,8 +85,17 @@ struct TVWindow: View {
         content
             .onAppear {
                 TVWindowState.shared.open = true
-                WindowOpener.shared.openWindow = openWindow
+                let opener = WindowOpener.shared
+                opener.openWindow = openWindow
+                opener.dismissWindow = dismissWindow
+                opener.openImmersiveSpace = openImmersiveSpace
+                opener.dismissImmersiveSpace = dismissImmersiveSpace
                 _ = ControllerButtonWatcher.shared
+                _ = Theater.shared  // the settings menu's Theater tab reaches the app from now on
+                // test switch: WWHD_TEST_THEATER=1 enters theater mode at start
+                if ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"] == "1", !Theater.shared.active {
+                    Task { await Theater.shared.enter() }
+                }
             }
             .onDisappear { TVWindowState.shared.open = false }
             .onChange(of: scenePhase) { _, phase in TVWindowState.shared.open = phase != .background }
@@ -94,6 +116,7 @@ struct TVWindow: View {
             .ornament(attachmentAnchor: .scene(.bottom)) {
                 HStack {
                     Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
+                    Button { Task { await Theater.shared.enter() } } label: { Label("Theater mode", systemImage: "sparkles.tv") }
                     Button {
                         if gamepad.open { dismissWindow(id: "gamepad", value: GamePadWindowState.value) } else { openGamePad() }
                     } label: {
@@ -227,6 +250,9 @@ final class ControllerButtonWatcher {
 struct GamePadWindow: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @State private var view = GamePadLayerView()
     private let tv = TVWindowState.shared
 
@@ -236,16 +262,16 @@ struct GamePadWindow: View {
             // a closed window may keep its view: follow the window itself (closed: picture-in-picture)
             .onAppear {
                 view.attach(true)
-                WindowOpener.shared.openWindow = openWindow
+                if !tv.open { register() }
             }
             .onDisappear { view.attach(false) }
             .onChange(of: scenePhase) { _, phase in view.attach(phase != .background) }
             // the TV window closed: its openWindow action may go with it, use this window's
-            .onChange(of: tv.open) { _, open in if !open { WindowOpener.shared.openWindow = openWindow } }
+            .onChange(of: tv.open) { _, open in if !open { register() } }
             .ornament(attachmentAnchor: .scene(.bottom)) {
                 HStack {
                     Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
-                    if !tv.open {
+                    if !tv.open, !Theater.shared.active {
                         Button { openWindow(id: "tv", value: TVWindowState.value) } label: { Label("Open TV screen", systemImage: "tv") }
                     }
                 }
@@ -253,6 +279,15 @@ struct GamePadWindow: View {
                 .padding(8)
                 .glassBackgroundEffect()
             }
+    }
+
+    /// The TV window closed: its actions may go with it, use this window's.
+    private func register() {
+        let opener = WindowOpener.shared
+        opener.openWindow = openWindow
+        opener.dismissWindow = dismissWindow
+        opener.openImmersiveSpace = openImmersiveSpace
+        opener.dismissImmersiveSpace = dismissImmersiveSpace
     }
 }
 
