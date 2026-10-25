@@ -56,6 +56,7 @@ std::atomic<float> g_gamepad_gain{1};
 std::atomic<float> g_gain{1};  // master volume (issue #124), read by the producer mix
 std::atomic<int> g_channels{2};
 std::atomic<bool> g_requested{false}, g_fallback{false}, g_device_changed{false};
+std::atomic<bool> g_external{false};  // visionOS Full Screen: RealityKit pulls the sound (wwhd_visionos_audio_source)
 std::atomic<int> g_test{-1};     // sample position; only producer advances, UI starts/stops
 constexpr int kTestSlot = kRate; // 0.65 s tone + 0.35 s silence per speaker
 int header_size() {
@@ -133,7 +134,7 @@ OSStatus output_changed(AudioObjectID, UInt32, const AudioObjectPropertyAddress 
 #if defined(__APPLE__) && !defined(WWHD_SDL_HOST)
 OSStatus render(void *, AudioUnitRenderActionFlags *, const AudioTimeStamp *, UInt32, UInt32 frames,
                 AudioBufferList *io) {
-    if (g_device_changed)
+    if (g_device_changed || g_external)
         memset(io->mBuffers[0].mData, 0, frames * g_channels * 2);
     else
         pull((int16_t *)io->mBuffers[0].mData, frames);
@@ -170,6 +171,9 @@ void init() {
     std::call_once(g_start, [] {
         std::string saved;
         bool surround = hostui::get("audioSpeakers", saved) && saved == "surround";
+#if defined(__APPLE__) && TARGET_OS_VISION
+        if (saved.empty()) surround = true;  // the headset places the channels around you (Full Screen: theater.mm)
+#endif
         if (const char *e = getenv("WWHD_AUDIO_SPEAKERS"))
             surround = !strcmp(e, "surround");
         g_requested = surround;
@@ -581,3 +585,75 @@ void stats(uint64_t &underrun, uint64_t &dropped) {
 }
 
 } // namespace audio
+
+#if defined(__APPLE__) && !defined(WWHD_SDL_HOST) && TARGET_OS_VISION
+// visionOS Full Screen: the sound as positioned sources in the immersive space (Theater.swift
+// TheaterSound), each a RealityKit audio generator pulling one source here, on RealityKit's audio thread,
+// while RemoteIO plays silence. Sources: 0 front left, 1 front right, 2 centre, 3 surround left,
+// 4 surround right (2 to 4 silent in stereo); the subwoofer goes to the two front sources. Each source
+// has its own queue: the first that runs out pulls a block from the ring for all of them.
+namespace {
+constexpr int kSources = 5, kQueue = 4096;
+float g_queue[kSources][kQueue];
+int g_queued[kSources];
+std::mutex g_queue_mutex;
+std::atomic<uint64_t> g_source_calls{0};
+
+void fill_queues(int frames) {
+    int16_t block[1024 * 6];
+    const int ch = audio::g_channels;
+    while (frames > 0) {
+        const int n = std::min(frames, 1024);
+        audio::pull(block, n);
+        for (int s = 0; s < kSources; s++) {
+            const int drop = std::max(0, g_queued[s] + n - kQueue);  // a source that stopped pulling
+            if (drop) {
+                memmove(g_queue[s], g_queue[s] + drop, (g_queued[s] - drop) * sizeof(float));
+                g_queued[s] -= drop;
+            }
+        }
+        for (int i = 0; i < n; i++) {
+            const int16_t *f = block + i * ch;
+            const float k = 1.0f / 32768;
+            float v[kSources] = {f[0] * k, f[1] * k, 0, 0, 0};
+            if (ch == 6) {
+                v[0] += f[3] * k * 0.5f;
+                v[1] += f[3] * k * 0.5f;
+                v[2] = f[2] * k;
+                v[3] = f[4] * k;
+                v[4] = f[5] * k;
+            }
+            for (int s = 0; s < kSources; s++) g_queue[s][g_queued[s] + i] = v[s];
+        }
+        for (int s = 0; s < kSources; s++) g_queued[s] += n;
+        frames -= n;
+    }
+}
+}  // namespace
+
+extern "C" int wwhd_visionos_audio_channels() { return audio::g_channels; }
+
+extern "C" void wwhd_visionos_audio_external(int on) {
+    if (audio::g_external.exchange(on != 0) == (on != 0)) return;
+    {
+        std::lock_guard lock(g_queue_mutex);
+        for (int &q : g_queued) q = 0;
+    }
+    LOG("[audio] Full Screen sound sources %s", on ? "on" : "off (window output)");
+}
+
+// RealityKit's audio thread: `frames` samples of source `source` into out
+extern "C" void wwhd_visionos_audio_source(int source, float *out, int frames) {
+    if (source < 0 || source >= kSources || frames <= 0 || frames > kQueue || !audio::g_external) {
+        if (frames > 0) memset(out, 0, sizeof(float) * frames);
+        return;
+    }
+    std::lock_guard lock(g_queue_mutex);
+    if (g_queued[source] < frames) fill_queues(frames - g_queued[source]);
+    memcpy(out, g_queue[source], sizeof(float) * frames);
+    g_queued[source] -= frames;
+    memmove(g_queue[source], g_queue[source] + frames, sizeof(float) * g_queued[source]);
+    if (source == 0 && g_source_calls++ % 2000 == 0)
+        LOG("[audio] Full Screen source block %d frames, %d queued in the ring", frames, audio::buffered_frames());
+}
+#endif

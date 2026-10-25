@@ -1,3 +1,4 @@
+import AVFoundation
 import Metal
 import RealityKit
 import SwiftUI
@@ -242,6 +243,7 @@ struct TheaterSpace: View {
     @State private var controls: Entity?
     @State private var frames: EventSubscription?
     @State private var animation = Animation()
+    @State private var sound: TheaterSound?
 
     /// What moves each frame: the game's scenery (GameScenery) and the reflection's ripple.
     final class Animation {
@@ -271,12 +273,16 @@ struct TheaterSpace: View {
                 let pictures = GameScenery.load(gameFolder: folder)
                 await MainActor.run { animation.scenery = GameScenery.build(pictures, into: world, seaLevel: Self.seaLevel) }
             }
+            let sound = TheaterSound()
+            content.add(sound.root)
+            self.sound = sound
             let reflection = reflection, sky = SkyClock(world: world)
             frames = content.subscribe(to: SceneEvents.Update.self) { _ in
                 let t = Date().timeIntervalSince(animation.start)
                 animation.scenery(t)
                 sky.update()
                 ScreenPicture.shared.check()
+                sound.update(size: Theater.shared.size, onSea: Theater.shared.surroundings == .sky)
                 // the reflection sways a little, as on moving water (in 3D it shows the left eye's half)
                 let scaleX = ScreenPicture.shared.reflectionScaleX
                 for strip in reflection.children {
@@ -306,6 +312,7 @@ struct TheaterSpace: View {
         }
         .onDisappear {
             ScreenPicture.shared.detach(owner: animation)
+            sound?.stop()
             Theater.shared.ended()
             // the TV window again, whoever closed the space
             if !TVWindowState.shared.open { openWindow(id: "tv", value: TVWindowState.value) }
@@ -620,5 +627,73 @@ struct TheaterControls: View {
         .frame(width: inGamePadWindow ? 560 : 460)
         .padding(20)
         .glassBackgroundEffect()
+    }
+}
+
+/// Full Screen's sound: the game's channels as sound sources in the immersive space instead of the window
+/// output (runtime/src/audio_out.cpp wwhd_visionos_audio_source). Front left and right at the screen's
+/// sides, the centre at its middle, the surround channels behind you to the sides (Surround 5.1); the
+/// headset keeps them in place as you turn your head. Settings > Vision Pro turns it off: the window output
+/// as before. If a source cannot start, the window output stays.
+@MainActor final class TheaterSound {
+    let root = Entity()  // in the space's coordinates (the viewer's feet at the origin)
+    private var sources: [Entity] = []
+    private var controllers: [AudioGeneratorController] = []
+    private var placed = ""
+
+    init() { root.name = "sound" }
+
+    /// Each frame: on or off as the setting says, and placed for the screen.
+    func update(size: Theater.Size, onSea: Bool) {
+        let wanted = wwhd_visionos_spatial_sound() != 0
+        if wanted, controllers.isEmpty { start() } else if !wanted, !controllers.isEmpty { stop() }
+        guard !sources.isEmpty else { return }
+        let key = "\(size.rawValue) \(onSea) \(sources.count)"
+        guard key != placed else { return }
+        placed = key
+        let d = size.distance, y = TheaterSpace.layout(size, onSea: onSea).center
+        let side = size.width * 0.42 / d  // the front sources' angle, near the screen's edges
+        let spots: [SIMD3<Float>] = [[-sin(side) * d, y, -cos(side) * d], [sin(side) * d, y, -cos(side) * d], [0, y, -d],
+                                     [-1.6, 1.3, 0.9], [1.6, 1.3, 0.9]]
+        for (i, e) in sources.enumerated() { e.position = spots[i] }
+    }
+
+    private func start() {
+        let count = wwhd_visionos_audio_channels() == 6 ? 5 : 2
+        do {
+            for i in 0..<count {
+                let e = Entity()
+                // the same loudness at every screen size: no fall-off with distance
+                e.components.set(SpatialAudioComponent(gain: .zero, directLevel: .zero, reverbLevel: -12, directivity: .beam(focus: 0),
+                                                       distanceAttenuation: .rolloff(factor: 0)))
+                root.addChild(e)
+                sources.append(e)
+                controllers.append(try e.playAudio(configuration: .init(layoutTag: kAudioChannelLayoutTag_Mono), Self.renderer(Int32(i))))
+            }
+            wwhd_visionos_audio_external(1)
+            placed = ""
+        } catch {
+            NSLog("[audio] Full Screen sound sources: %@", error.localizedDescription)
+            stop()
+        }
+    }
+
+    func stop() {
+        wwhd_visionos_audio_external(0)
+        controllers.forEach { $0.stop() }
+        controllers = []
+        sources.forEach { $0.removeFromParent() }
+        sources = []
+    }
+
+    /// Source `source`'s render block (RealityKit's audio thread; nothing of the main actor in it).
+    nonisolated private static func renderer(_ source: Int32) -> Audio.GeneratorRenderHandler {
+        { _, _, frameCount, data in
+            for buffer in UnsafeMutableAudioBufferListPointer(data) {
+                guard let p = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
+                wwhd_visionos_audio_source(source, p, Int32(min(frameCount, buffer.mDataByteSize / 4)))
+            }
+            return noErr
+        }
     }
 }

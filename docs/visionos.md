@@ -102,6 +102,11 @@ game folder, and the other way round.
   4, Switch Pro Controller) are the GamePad's, so you aim the bow, hookshot, boomerang, telescope and
   first-person view by moving the controller, as on the Wii U. The Vision Pro tab shows whether motion
   arrives. The game's own Options > Gyro switch has to be on, and the right stick still.
+- **Sound**: the game's sound comes from the TV window and follows it. Settings > Audio > Speakers starts
+  at Surround 5.1 on the headset (Stereo if the output refuses six channels). In Full Screen the channels
+  are sound sources around you: front left, centre and front right at the big screen, the surround
+  channels behind you to the sides; Settings > Vision Pro > "Sound from the screen and around you" turns
+  that off.
 - **Gear button** below either window: the settings menu, without the controller.
 - **Full Screen**: the full-screen button below the game window, or Settings > Vision Pro. The game moves
   to a big, slightly curved screen: on The Great Sea under a bright sky, with the picture reflected

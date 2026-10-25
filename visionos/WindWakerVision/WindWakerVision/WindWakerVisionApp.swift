@@ -441,7 +441,11 @@ final class GameLayerView: GameControllerLayerView {
 
     private static func startRuntime() {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        // Surround 5.1 (audio_out.cpp: the headset's default) as six channels the headset places, not a stereo mix
+        try? AVAudioSession.sharedInstance().setSupportsMultichannelContent(true)
         try? AVAudioSession.sharedInstance().setActive(true)
+        NSLog("[audio] session: %.0f Hz, up to %d output channels, %.1f ms buffer", AVAudioSession.sharedInstance().sampleRate,
+              AVAudioSession.sharedInstance().maximumOutputNumberOfChannels, AVAudioSession.sharedInstance().ioBufferDuration * 1000)
         // Documents holds game/ (the extracted game, copied onto the device) and save/; relative paths
         // (logs, captures) resolve there too
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

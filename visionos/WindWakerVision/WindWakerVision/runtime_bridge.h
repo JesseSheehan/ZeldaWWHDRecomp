@@ -39,6 +39,13 @@ int wwhd_visionos_depth3d(void);
 void wwhd_visionos_tv_picture_size(int* width, int* height);
 // the game's time of day in degrees (0..360, 15 per hour), or -1 before the game is up (Full Screen's sky)
 double wwhd_visionos_time_of_day(void);
+// Full Screen's sound (audio_out.cpp, Theater.swift TheaterSound): Settings > Vision Pro has it on; the
+// output's channels (2 or 6); on: RealityKit pulls the sound as sources (0 front left, 1 front right,
+// 2 centre, 3 surround left, 4 surround right) and the window output goes silent
+int wwhd_visionos_spatial_sound(void);
+int wwhd_visionos_audio_channels(void);
+void wwhd_visionos_audio_external(int on);
+void wwhd_visionos_audio_source(int source, float* out, int frames);
 #ifdef __cplusplus
 }
 #endif

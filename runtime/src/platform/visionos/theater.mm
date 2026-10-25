@@ -13,6 +13,7 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <string>
 
 #include "gfx/depth3d.h"
 #include "motion/motion.h"
@@ -44,6 +45,7 @@ static int g_width, g_height;  // the theater texture's size
 static std::atomic<wwhd_theater_action_fn> g_action{nullptr};
 static std::atomic<int> g_active{0}, g_size{1}, g_environment{0};
 static std::atomic<bool> g_game_memory{false};  // the game's memory is set up (theater_init ran)
+static std::atomic<bool> g_spatial_sound{true};  // Full Screen's sound from the screen and around you (TheaterSound)
 
 // any thread: theater mode is on, and the size of its texture
 bool theater_size(int& w, int& h) {
@@ -142,6 +144,14 @@ static void draw_tab() {
          "Pinch the controls under the screen, or use this page.");
     ImGui::Spacing();
     if (ImGui::Button(active ? "Leave full screen" : "Full screen")) act(0, active ? 0 : 1);
+    bool spatial = false;
+    if (check("Sound from the screen and around you", g_spatial_sound.load(), &spatial))
+        hostui::post([spatial] {
+            g_spatial_sound = spatial;
+            hostui::set("visionos.spatialSound", spatial ? "1" : "0");
+        });
+    note("In Full Screen the game's sound comes from the big screen, and with Settings > Audio > Speakers at "
+         "Surround 5.1 the surround channels from behind you. Off: the sound plays as in the window.");
     ImGui::SeparatorText("Screen");
     static const char* kSizes[] = {"Small (3 m wide, 4 m away)", "Medium (5 m wide, 7 m away)", "Huge (12 m wide, 12 m away)"};
     for (int i = 0; i < 3; i++)
@@ -159,6 +169,8 @@ void theater_init() {
     tab.name = "Vision Pro";
     tab.draw = draw_tab;
     overlay::ext::add_tab(std::move(tab), "audio");
+    std::string saved;
+    if (hostui::get("visionos.spatialSound", saved)) g_spatial_sound = saved != "0";
     g_game_memory = true;
 }
 
@@ -177,6 +189,8 @@ extern "C" void wwhd_visionos_set_theater(wwhd_theater_next_fn next, wwhd_theate
     if (on) LOG("[visionos] theater screen on (%dx%d)", width, height);
     else LOG("[visionos] theater screen off");
 }
+
+extern "C" int wwhd_visionos_spatial_sound() { return visionos::g_spatial_sound.load(); }
 
 extern "C" void wwhd_visionos_set_theater_actions(wwhd_theater_action_fn fn) { visionos::g_action = fn; }
 
