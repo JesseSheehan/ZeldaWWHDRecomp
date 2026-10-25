@@ -639,6 +639,7 @@ extern "C" void wwhd_visionos_audio_external(int on) {
         std::lock_guard lock(g_queue_mutex);
         for (int &q : g_queued) q = 0;
     }
+    audio::g_flush = true;  // the first pull after the switch skips what queued up meanwhile (latency)
     LOG("[audio] Full Screen sound sources %s", on ? "on" : "off (window output)");
 }
 
