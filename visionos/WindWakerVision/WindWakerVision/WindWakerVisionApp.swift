@@ -156,7 +156,7 @@ struct TVWindow: View {
                         controls.poke()
                         if gamepad.open { dismissWindow(id: "gamepad", value: GamePadWindowState.value) } else { openGamePad() }
                     } label: {
-                        Label(gamepad.open ? "Close GamePad screen" : "Open GamePad screen", systemImage: "gamecontroller")
+                        Label(gamepad.open ? "Close GamePad screen" : "Open GamePad screen", systemImage: "rectangle.on.rectangle")
                     }
                 }
                 .labelStyle(.iconOnly)

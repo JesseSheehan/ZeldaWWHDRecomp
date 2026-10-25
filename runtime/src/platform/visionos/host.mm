@@ -528,12 +528,31 @@ static void draw_imgui_half(ImDrawData* d, MTLRenderPassDescriptor* rp, id<MTLRe
     d->DisplaySize = size;
 }
 
-// While 3D is shown "depth3dShown" is saved as 1 (leaving 3D or the app leaving the front saves 0): a start
-// that finds 1 follows a crash in 3D, and starts with 3D off (load_graphics_options).
+// For the first 20 s of 3D (after turning it on, a start with it on, or coming back to the front)
+// "depth3dShown" is saved as 1; then, or on leaving 3D or the front, 0. A start that finds 1 follows a
+// crash soon after 3D began, and starts with 3D off (load_graphics_options). An end later on, as when a
+// new version is installed or the system ends the app, keeps 3D as the player left it.
 std::atomic<bool> g_d3_marked{false};
 static void mark_3d_shown(bool shown) {
     if (g_d3_marked.exchange(shown) == shown) return;
     [[NSUserDefaults standardUserDefaults] setObject:shown ? @"1" : @"0" forKey:@"wwhd.depth3dShown"];
+}
+static void note_3d_frame(bool on3d) {  // render thread, each frame
+    static bool settled = false;   // 3D has been showing for a while
+    static double since = 0;
+    if (!on3d) {
+        settled = false;
+        if (g_d3_marked.load()) mark_3d_shown(false);
+        return;
+    }
+    const double now = CACurrentMediaTime();
+    if (!g_d3_marked.load() && !settled) {
+        mark_3d_shown(true);
+        since = now;
+    } else if (g_d3_marked.load() && now - since > 20) {
+        mark_3d_shown(false);
+        settled = true;
+    }
 }
 
 // the side-by-side screen picture (the game window's and Full Screen's screen texture is always two
@@ -541,8 +560,7 @@ static void mark_3d_shown(bool shown) {
 // upscaled), so switching 3D changes only what is drawn here, from one frame to the next. L: one half.
 static void compose_tv_sbs(id<MTLTexture> target, const Layout& L) {
     const bool on3d = depth3d::enabled.load();
-    if (on3d) mark_3d_shown(true);
-    else if (g_d3_marked.load()) mark_3d_shown(false);
+    note_3d_frame(on3d);
     const bool eyes = on3d && make_eyes();
     id<MTLTexture> flat = eyes ? nil : upscaled(R.tv.tex, R.tv.srgb, (int)lroundf(L.tv.w), (int)lroundf(L.tv.h));
     MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -660,10 +678,10 @@ static void load_graphics_options() {
     if (saved_float("depth3d", v)) depth3d::enabled = v != 0;
     std::string shown;
     if (host_setting("depth3dShown", shown) && shown == "1" && depth3d::enabled.load()) {
-        depth3d::enabled = false;  // the last run ended while 3D was showing (a crash): start without it
+        depth3d::enabled = false;  // the last run ended just after 3D began (a crash): start without it
         set_host_setting("depth3dShown", "0");
         set_float("depth3d", 0);
-        LOG("[3d] the last run ended while 3D was shown: 3D is off this time (Settings > Vision Pro to turn it on)");
+        LOG("[3d] the last run ended just after 3D began: 3D is off this time (Settings > Vision Pro to turn it on)");
     }
     if (saved_float("depth3dStrength", v)) depth3d::strength = std::clamp(v, 0.0f, 1.0f);
     if (saved_float("depth3dSwap", v)) depth3d::swap = v != 0;
