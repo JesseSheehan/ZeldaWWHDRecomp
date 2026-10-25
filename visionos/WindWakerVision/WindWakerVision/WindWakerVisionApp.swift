@@ -410,6 +410,7 @@ final class GameLayerView: GameControllerLayerView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        Self.anchorSound(to: window?.windowScene)
         guard window != nil, !Self.started else { return }
         Self.started = true
         updateDrawableSize()
@@ -425,6 +426,17 @@ final class GameLayerView: GameControllerLayerView {
 
     private func updateDrawableSize() {
         wwhd_visionos_set_drawable_size(Double(bounds.width), Double(bounds.height), scale)
+    }
+
+    /// The game's sound comes from the TV window (visionOS otherwise picks one of the app's windows, often
+    /// the GamePad window); while no TV window is open the system chooses.
+    private static func anchorSound(to scene: UIWindowScene?) {
+        let anchor: AVAudioSession.AnchoringStrategy = scene.map { .scene(identifier: $0.session.persistentIdentifier) } ?? .automatic
+        do {
+            try AVAudioSession.sharedInstance().setIntendedSpatialExperience(.headTracked(soundStageSize: .automatic, anchoringStrategy: anchor))
+        } catch {
+            NSLog("[audio] spatial experience: %@", error.localizedDescription)
+        }
     }
 
     private static func startRuntime() {
