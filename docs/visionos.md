@@ -103,7 +103,8 @@ game folder, and the other way round.
   first-person view by moving the controller, as on the Wii U. The Vision Pro tab shows whether motion
   arrives. The game's own Options > Gyro switch has to be on, and the right stick still.
 - **Sound**: the game's sound comes from the TV window and follows it. Settings > Audio > Speakers starts
-  at Surround 5.1 on the headset (Stereo if the output refuses six channels). In Full Screen the channels
+  at Surround 5.1 on the headset: the window plays it mixed to stereo (the headset's output takes two
+  channels), placed at the window by visionOS. In Full Screen the channels
   are sound sources around you: front left, centre and front right at the big screen, the surround
   channels behind you to the sides; Settings > Vision Pro > "Sound from the screen and around you" turns
   that off.

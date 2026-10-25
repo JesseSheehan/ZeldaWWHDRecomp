@@ -62,7 +62,17 @@ constexpr int kTestSlot = kRate; // 0.65 s tone + 0.35 s silence per speaker
 int header_size() {
     return g_channels == 6 ? 68 : 44;
 }
+#if defined(__APPLE__) && !defined(WWHD_SDL_HOST) && TARGET_OS_VISION
+std::atomic<bool> g_downmix{false};  // the game mixes 5.1, the output takes stereo: render() mixes it down
+#endif
 void fallback() {
+#if defined(__APPLE__) && !defined(WWHD_SDL_HOST) && TARGET_OS_VISION
+    // the headset's output takes two channels; the game keeps its six: Full Screen plays them as sound
+    // sources around you (wwhd_visionos_audio_source), the window gets them mixed to stereo
+    g_downmix = true;
+    LOG("[audio] Surround 5.1: the output takes stereo; the window gets a stereo mix, Full Screen the channels");
+    return;
+#endif
     g_channels = 2;
     g_fallback = true;
     LOG("[audio] Surround 5.1 unavailable on this output; using stereo (restart to retry)");
@@ -134,6 +144,29 @@ OSStatus output_changed(AudioObjectID, UInt32, const AudioObjectPropertyAddress 
 #if defined(__APPLE__) && !defined(WWHD_SDL_HOST)
 OSStatus render(void *, AudioUnitRenderActionFlags *, const AudioTimeStamp *, UInt32, UInt32 frames,
                 AudioBufferList *io) {
+#if TARGET_OS_VISION
+    if (g_downmix) {
+        auto *out = (int16_t *)io->mBuffers[0].mData;
+        if (g_device_changed || g_external) {
+            memset(out, 0, frames * 4);
+            return noErr;
+        }
+        static int16_t block[1024 * 6];
+        for (UInt32 done = 0; done < frames;) {
+            const UInt32 n = std::min<UInt32>(frames - done, 1024);
+            pull(block, n);
+            for (UInt32 i = 0; i < n; i++) {  // FL FR FC LFE BL BR -> L R (ITU, -3 dB centre and surrounds)
+                const int16_t *f = block + i * 6;
+                const float c = 0.707f * f[2] + 0.5f * f[3];
+                const float l = 0.7f * (f[0] + c + 0.707f * f[4]), r = 0.7f * (f[1] + c + 0.707f * f[5]);
+                out[(done + i) * 2] = int16_t(std::clamp(l, -32768.0f, 32767.0f));
+                out[(done + i) * 2 + 1] = int16_t(std::clamp(r, -32768.0f, 32767.0f));
+            }
+            done += n;
+        }
+        return noErr;
+    }
+#endif
     if (g_device_changed || g_external)
         memset(io->mBuffers[0].mData, 0, frames * g_channels * 2);
     else
@@ -249,7 +282,7 @@ void init() {
         }
 #if TARGET_OS_VISION
         if (g_channels == 6)
-            fallback();  // stereo: the system spatializes it
+            fallback();  // stereo out; the game keeps 5.1 (Full Screen's sources), the window a mix of it
 #else
         if (g_channels == 6) {
             AudioDeviceID device = 0;
@@ -279,14 +312,19 @@ void init() {
         fmt.mSampleRate = kRate;
         fmt.mFormatID = kAudioFormatLinearPCM;
         fmt.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
-        fmt.mChannelsPerFrame = g_channels;
+#if TARGET_OS_VISION
+        const int device_channels = g_downmix ? 2 : g_channels.load();
+#else
+        const int device_channels = g_channels;
+#endif
+        fmt.mChannelsPerFrame = device_channels;
         fmt.mBitsPerChannel = 16;
         fmt.mFramesPerPacket = 1;
-        fmt.mBytesPerFrame = g_channels * 2;
-        fmt.mBytesPerPacket = g_channels * 2;
+        fmt.mBytesPerFrame = device_channels * 2;
+        fmt.mBytesPerPacket = device_channels * 2;
         OSStatus format_status =
             AudioUnitSetProperty(g_unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &fmt, sizeof fmt);
-        if (g_channels == 6) {
+        if (device_channels == 6) {
             // Explicit descriptions avoid CoreAudio's default six-channel (AAC/MPEG) order.
             alignas(AudioChannelLayout) uint8_t
                 storage[offsetof(AudioChannelLayout, mChannelDescriptions) + 6 * sizeof(AudioChannelDescription)]{};
@@ -325,7 +363,7 @@ void init() {
         // Master gain is applied to the common producer mix, including guest PCM.
         auto start = [] { return AudioUnitInitialize(g_unit) == noErr && AudioOutputUnitStart(g_unit) == noErr; };
         bool started = start();
-        if (!started && g_channels == 6) {
+        if (!started && device_channels == 6) {
             AudioOutputUnitStop(g_unit);
             AudioUnitUninitialize(g_unit);
             fallback();
@@ -351,7 +389,7 @@ void init() {
                                            kAudioObjectPropertyElementMain};
         AudioObjectAddPropertyListener(kAudioObjectSystemObject, &changed, output_changed, nullptr);
 #endif
-        LOG("[audio] CoreAudio output started (48 kHz, %d channels)", g_channels.load());
+        LOG("[audio] CoreAudio output started (48 kHz, %d channels)", device_channels);
 #else
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
             LOG("[audio] SDL audio initialization: %s", SDL_GetError());
