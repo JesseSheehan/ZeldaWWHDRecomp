@@ -10,7 +10,10 @@
 // immersive space and reports back what is showing (wwhd_visionos_theater_state).
 #import <Metal/Metal.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -46,6 +49,7 @@ static std::atomic<wwhd_theater_action_fn> g_action{nullptr};
 static std::atomic<int> g_active{0}, g_size{1}, g_environment{0};
 static std::atomic<bool> g_game_memory{false};  // the game's memory is set up (theater_init ran)
 static std::atomic<bool> g_spatial_sound{true};  // Full Screen's sound from the screen and around you (TheaterSound)
+static std::atomic<float> g_spatial_boost{9};     // its sources' gain (dB): about the window's loudness
 
 // any thread: theater mode is on, and the size of its texture
 bool theater_size(int& w, int& h) {
@@ -152,6 +156,15 @@ static void draw_tab() {
         });
     note("In Full Screen the game's sound comes from the big screen, and with Settings > Audio > Speakers at "
          "Surround 5.1 the surround channels from behind you. Off: the sound plays as in the window.");
+    if (g_spatial_sound.load()) {
+        float boost = g_spatial_boost.load();
+        if (ImGui::SliderFloat("Full Screen loudness", &boost, 0.0f, 18.0f, "+%.0f dB", ImGuiSliderFlags_AlwaysClamp))
+            g_spatial_boost = boost;  // live
+        if (ImGui::IsItemDeactivatedAfterEdit())
+            hostui::post([boost] { hostui::set("visionos.spatialBoost", std::to_string(int(std::lround(boost)))); });
+        note("Sound placed in the space comes out softer than the window's; this raises it (Settings > Audio > Master "
+             "volume still applies).");
+    }
     ImGui::SeparatorText("Screen");
     static const char* kSizes[] = {"Small (3 m wide, 4 m away)", "Medium (5 m wide, 7 m away)", "Huge (12 m wide, 12 m away)"};
     for (int i = 0; i < 3; i++)
@@ -171,6 +184,7 @@ void theater_init() {
     overlay::ext::add_tab(std::move(tab), "audio");
     std::string saved;
     if (hostui::get("visionos.spatialSound", saved)) g_spatial_sound = saved != "0";
+    if (hostui::get("visionos.spatialBoost", saved)) g_spatial_boost = std::clamp(std::strtof(saved.c_str(), nullptr), 0.0f, 18.0f);
     g_game_memory = true;
 }
 
@@ -191,6 +205,7 @@ extern "C" void wwhd_visionos_set_theater(wwhd_theater_next_fn next, wwhd_theate
 }
 
 extern "C" int wwhd_visionos_spatial_sound() { return visionos::g_spatial_sound.load(); }
+extern "C" double wwhd_visionos_spatial_boost() { return visionos::g_spatial_boost.load(); }
 
 extern "C" void wwhd_visionos_set_theater_actions(wwhd_theater_action_fn fn) { visionos::g_action = fn; }
 

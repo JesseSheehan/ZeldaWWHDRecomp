@@ -43,6 +43,7 @@ double wwhd_visionos_time_of_day(void);
 // output's channels (2 or 6); on: RealityKit pulls the sound as sources (0 front left, 1 front right,
 // 2 centre, 3 surround left, 4 surround right) and the window output goes silent
 int wwhd_visionos_spatial_sound(void);
+double wwhd_visionos_spatial_boost(void);  // the sources' gain in dB (Settings > Vision Pro > Full Screen loudness)
 int wwhd_visionos_audio_channels(void);
 void wwhd_visionos_audio_external(int on);
 void wwhd_visionos_audio_source(int source, float* out, int frames);

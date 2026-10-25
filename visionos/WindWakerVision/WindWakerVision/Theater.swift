@@ -640,6 +640,7 @@ struct TheaterControls: View {
     private var sources: [Entity] = []
     private var controllers: [AudioGeneratorController] = []
     private var placed = ""
+    private var boost: Double = -1  // the gain the sources have (dB)
 
     init() { root.name = "sound" }
 
@@ -648,6 +649,11 @@ struct TheaterControls: View {
         let wanted = wwhd_visionos_spatial_sound() != 0
         if wanted, controllers.isEmpty { start() } else if !wanted, !controllers.isEmpty { stop() }
         guard !sources.isEmpty else { return }
+        let gain = wwhd_visionos_spatial_boost()
+        if gain != boost {
+            boost = gain
+            for e in sources { e.components[SpatialAudioComponent.self]?.gain = gain }
+        }
         let key = "\(size.rawValue) \(onSea) \(sources.count)"
         guard key != placed else { return }
         placed = key
@@ -672,6 +678,7 @@ struct TheaterControls: View {
             }
             wwhd_visionos_audio_external(1)
             placed = ""
+            boost = -1
         } catch {
             NSLog("[audio] Full Screen sound sources: %@", error.localizedDescription)
             stop()

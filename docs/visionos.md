@@ -107,7 +107,7 @@ game folder, and the other way round.
   channels), placed at the window by visionOS. In Full Screen the channels
   are sound sources around you: front left, centre and front right at the big screen, the surround
   channels behind you to the sides; Settings > Vision Pro > "Sound from the screen and around you" turns
-  that off.
+  that off, and its "Full Screen loudness" (+9 dB at first) matches the window's.
 - **Gear button** below either window: the settings menu, without the controller.
 - **Full Screen**: the full-screen button below the game window, or Settings > Vision Pro. The game moves
   to a big, slightly curved screen: on The Great Sea under a bright sky, with the picture reflected
