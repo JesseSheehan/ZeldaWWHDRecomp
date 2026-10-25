@@ -15,6 +15,7 @@
 #include <mutex>
 
 #include "gfx/depth3d.h"
+#include "motion/motion.h"
 #include "guest_addr.h"
 #include "imgui.h"
 #include "overlay/extensions.h"
@@ -27,6 +28,8 @@ extern std::atomic<bool> g_metalfx;  // host.mm: MetalFX upscaling of the TV pic
 extern std::atomic<int> g_metalfx_in_w, g_metalfx_in_h, g_metalfx_out_w, g_metalfx_out_h;  // its last frame
 void save_graphics_options();
 }  // namespace gfx
+
+extern "C" double wwhd_visionos_gyro_last(float rate[3]);  // host.mm: the last controller gyro sample
 
 typedef void* (*wwhd_theater_next_fn)(void);
 typedef void (*wwhd_theater_present_fn)(void* command_buffer);
@@ -87,6 +90,29 @@ static void draw_tab() {
                  gfx::g_metalfx_out_h.load());
         else
             note("Waiting: the picture is not enlarged right now (the window shows it at its size or smaller).");
+    }
+    ImGui::SeparatorText("Motion aiming");
+    {
+        motion::Settings g = motion::settings();
+        bool gyro = false;
+        if (check("Aim by moving the controller", g.source == motion::kController, &gyro)) {
+            g.source = gyro ? motion::kController : motion::kOff;
+            hostui::post([g] {
+                motion::set_settings(g);
+                for (const char* k : motion::kKeys) hostui::set(k, motion::value_of(g, k));
+            });
+        }
+        float rate[3];
+        const double age = wwhd_visionos_gyro_last(rate);
+        if (g.source != motion::kController)
+            note("Off (Settings > Controls > Gyro... has the other sources and the sensitivity).");
+        else if (motion::gyro_controllers() == 0)
+            note("No controller with motion sensors is connected (DualSense, DualShock 4, Switch Pro Controller).");
+        else if (age < 0 || age > 1)
+            note("%d controller(s) with motion sensors; no motion received yet.", motion::gyro_controllers());
+        else
+            note("Motion received: %.2f %.2f %.2f rad/s. Aim (bow, hookshot, telescope, first person) and move the "
+                 "controller; keep the right stick still. The game's own Options > Gyro must be on.", rate[0], rate[1], rate[2]);
     }
     ImGui::SeparatorText("3D");
     bool on3d = false;

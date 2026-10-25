@@ -943,6 +943,9 @@ void host_controller_values(float* v) {
 }
 
 // ---- motion sensors (motion/motion.h), as the AppKit host (gfx/input.mm update_motion_sensors) ----
+// the last sample, for the Vision Pro tab's status line (theater.mm)
+std::atomic<float> g_gyro_rate[3];
+std::atomic<double> g_gyro_time{0};
 // GameController.framework reports the gyro and accelerometer of DualSense, DualShock 4 and Switch Pro
 // controllers. Its frame (a controller lying flat): x right, y towards the top (away from the player), z up
 // out of the face; acceleration in g with gravity's sign. motion.h takes SDL's frame (x right, y up, z
@@ -991,6 +994,8 @@ static void update_motion_sensors() {
                     last_log = CACurrentMediaTime();
                     LOG("[gyro] GameController raw: rate %.3f %.3f %.3f rad/s, acc %.3f %.3f %.3f g", r.x, r.y, r.z, a.x, a.y, a.z);
                 }
+                for (int i = 0; i < 3; i++) g_gyro_rate[i] = gyro[i];
+                g_gyro_time = CACurrentMediaTime();
                 motion::controller_sample(id, 0, gyro, acc);
             };
         } else {
@@ -1135,3 +1140,10 @@ extern "C" void wwhd_visionos_tv_picture_size(int* width, int* height) {
 
 // 3D (gfx/depth3d.h) is on: Full Screen then sizes its texture for two eyes and uses the per-eye material
 extern "C" int wwhd_visionos_depth3d(void) { return depth3d::enabled.load() ? 1 : 0; }
+
+// the Vision Pro tab's motion status (theater.mm): the last gyro sample (rad/s) and its age (s; < 0: none)
+extern "C" double wwhd_visionos_gyro_last(float rate[3]) {
+    for (int i = 0; i < 3; i++) rate[i] = input::g_gyro_rate[i].load();
+    const double t = input::g_gyro_time.load();
+    return t > 0 ? CACurrentMediaTime() - t : -1;
+}

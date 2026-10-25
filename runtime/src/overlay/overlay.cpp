@@ -1956,6 +1956,10 @@ void load_gyro() {
     std::string v;
     for (const char* k : motion::kKeys)
         if (hostui::get(k, v)) saved.emplace_back(k, v);
+#ifdef WWHD_VISIONOS
+    // Apple Vision Pro: the controller is the GamePad, so its gyro aims unless chosen otherwise
+    if (!hostui::get("gyro.source", v)) saved.emplace_back("gyro.source", "controller");
+#endif
     motion::set_settings(motion::from_saved(saved));
 }
 // the Gyro dialog (Controls tab > Gyro..., gyro_popup.h): what it changes is saved at once
