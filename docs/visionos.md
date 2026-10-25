@@ -108,6 +108,9 @@ game folder, and the other way round.
   are sound sources around you: front left, centre and front right at the big screen, the surround
   channels behind you to the sides; Settings > Vision Pro > "Sound from the screen and around you" turns
   that off, and its "Full Screen loudness" (+9 dB at first) matches the window's.
+- **Rumble**: the controller vibrates when the game rumbles (Settings > Vision Pro: on/off and strength),
+  on controllers visionOS gives haptics for (PlayStation and Xbox controllers); the tab says when the
+  connected one has none.
 - **Aspect ratio** (Settings > Graphics): the game window and Full Screen's screen take the picture's
   shape (16:10, 21:9, 32:9), with no bars; "Match window" lets you resize the window freely and the game
   draws to its shape.

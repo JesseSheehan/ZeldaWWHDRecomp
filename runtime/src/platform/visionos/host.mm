@@ -19,6 +19,7 @@
 // typed text with the system keyboard (text_input.mm). While the app is not in front (headset off, Home,
 // another app) the game is paused, after a "Last session" state (app_pause.h, below). No mouse or file
 // panels yet.
+#import <CoreHaptics/CoreHaptics.h>
 #import <GameController/GameController.h>
 #import <Metal/Metal.h>
 #if __has_include(<MetalFX/MetalFX.h>)  // (the visionOS simulator has no MetalFX: no upscaling there)
@@ -31,6 +32,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -53,6 +55,7 @@
 #include "backends/imgui_impl_metal.h"
 #include "mods/mods.h"
 #include "motion/motion.h"
+#include "rumble.h"
 #include "overlay/guest_hud.h"
 #include "overlay/hostui.h"
 #include "overlay/overlay.h"
@@ -903,8 +906,100 @@ void release_mouse_bindings() {}
 bool gameplay_focused() { return true; }
 void release_keys() {}
 void held_keys(bool* keys) { std::fill(keys, keys + 256, false); }
-bool has_rumble() { return false; }
-void stop_rumble_now() {}
+// ---- rumble (rumble.h): the game's motor level drives each controller's haptics (GCController.haptics,
+// a Core Haptics engine playing one long continuous event whose intensity follows the level). Main
+// thread: update_rumble from the input timer, 60 times a second. Controllers without haptics (visionOS
+// gives none for some) are skipped; the Vision Pro tab says which kind is connected.
+std::atomic<float> g_rumble_strength{1};    // Settings > Vision Pro > Rumble strength (0..1)
+std::atomic<int> g_rumble_controllers{-1};  // controllers with haptics (-1: not looked yet)
+struct HapticMotor {
+    CHHapticEngine* engine = nil;
+    id<CHHapticAdvancedPatternPlayer> player = nil;
+    bool playing = false;
+};
+static std::map<uintptr_t, HapticMotor> g_motors;  // by controller (main thread)
+
+static HapticMotor* motor_for(GCController* c) {
+    auto it = g_motors.find((uintptr_t)(__bridge void*)c);
+    if (it != g_motors.end()) return it->second.engine ? &it->second : nullptr;
+    HapticMotor& m = g_motors[(uintptr_t)(__bridge void*)c];
+    if (!c.haptics) {
+        LOG("[rumble] %s: no haptics on this platform", c.vendorName.UTF8String ?: "controller");
+        return nullptr;
+    }
+    NSError* err = nil;
+    CHHapticEngine* engine = [c.haptics createEngineWithLocality:GCHapticsLocalityDefault];
+    engine.playsHapticsOnly = YES;
+    engine.autoShutdownEnabled = NO;
+    if (!engine || ![engine startAndReturnError:&err]) {
+        LOG("[rumble] %s: haptics did not start (%s)", c.vendorName.UTF8String ?: "controller", err.localizedDescription.UTF8String ?: "");
+        return nullptr;
+    }
+    CHHapticEvent* buzz = [[CHHapticEvent alloc]
+        initWithEventType:CHHapticEventTypeHapticContinuous
+               parameters:@[ [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1],
+                             [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.3f] ]
+             relativeTime:0
+                 duration:30];
+    CHHapticPattern* pattern = [[CHHapticPattern alloc] initWithEvents:@[ buzz ] parameters:@[] error:&err];
+    id<CHHapticAdvancedPatternPlayer> player = pattern ? [engine createAdvancedPlayerWithPattern:pattern error:&err] : nil;
+    if (!player) {
+        LOG("[rumble] %s: no haptic player (%s)", c.vendorName.UTF8String ?: "controller", err.localizedDescription.UTF8String ?: "");
+        [engine stopWithCompletionHandler:nil];
+        return nullptr;
+    }
+    player.loopEnabled = YES;
+    // the engine stops when the app leaves the front or the controller resets: start it again on the next use
+    HapticMotor* mp = &m;
+    engine.resetHandler = ^{ dispatch_async(dispatch_get_main_queue(), ^{ mp->playing = false; [mp->engine startAndReturnError:nil]; }); };
+    engine.stoppedHandler = ^(CHHapticEngineStoppedReason) { dispatch_async(dispatch_get_main_queue(), ^{ mp->playing = false; }); };
+    m.engine = engine;
+    m.player = player;
+    LOG("[rumble] %s: haptics ready", c.vendorName.UTF8String ?: "controller");
+    return &m;
+}
+
+static void set_motor(HapticMotor& m, float level) {
+    NSError* err = nil;
+    if (level <= 0) {
+        if (m.playing) [m.player stopAtTime:CHHapticTimeImmediate error:&err];
+        m.playing = false;
+        return;
+    }
+    if (!m.playing) {
+        [m.engine startAndReturnError:nil];
+        m.playing = [m.player startAtTime:CHHapticTimeImmediate error:&err];
+    }
+    CHHapticDynamicParameter* p = [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
+                                                                                  value:level
+                                                                           relativeTime:0];
+    [m.player sendParameters:@[ p ] atTime:CHHapticTimeImmediate error:&err];
+}
+
+static void update_rumble() {
+    static float shown = 0;
+    static int tick = 0;
+    const float level = std::clamp(rumble::host_level(16667) * g_rumble_strength.load(), 0.0f, 1.0f);
+    const bool look = tick++ % 60 == 0;  // once a second: controllers that came or went
+    if (!look && std::fabs(level - shown) < 0.02f) return;
+    shown = level;
+    int with = 0;
+    for (GCController* c in [GCController controllers]) {
+        if (!c.extendedGamepad) continue;
+        if (HapticMotor* m = motor_for(c)) {
+            with++;
+            set_motor(*m, level);
+        }
+    }
+    g_rumble_controllers = with;
+}
+
+bool has_rumble() { return true; }
+void stop_rumble_now() {
+    if (![NSThread isMainThread]) return;
+    for (auto& [_, m] : g_motors)
+        if (m.engine) set_motor(m, 0);
+}
 bool pro_controller() { return g_pro.load(std::memory_order_relaxed); }
 void set_controller_listener(void (*fn)(bool pro)) { g_controller_listener = fn; }
 void set_pro_controller(bool on) {
@@ -1074,6 +1169,7 @@ void init() {
         // gyro: sensors on or off with the source (a quarter second), the recalibrate binding
         static int tick = 0;
         if (tick++ % 60 == 0) update_motion_sensors();
+        if (tick % 4 == 0) update_rumble();
         if (!overlay::blocks_input()) {
             static const bool no_keys[256] = {};
             motion::poll_recalibrate(game, no_keys);

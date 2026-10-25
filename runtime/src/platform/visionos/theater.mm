@@ -25,6 +25,7 @@
 #include "overlay/extensions.h"
 #include "overlay/hostui.h"
 #include "overlay/widgets.h"
+#include "rumble.h"
 #include "runtime.h"
 
 namespace gfx {
@@ -34,6 +35,10 @@ void save_graphics_options();
 }  // namespace gfx
 
 extern "C" double wwhd_visionos_gyro_last(float rate[3]);  // host.mm: the last controller gyro sample
+namespace input {
+extern std::atomic<float> g_rumble_strength;    // host.mm: rumble strength (0..1)
+extern std::atomic<int> g_rumble_controllers;   // host.mm: controllers with haptics (-1: not looked yet)
+}  // namespace input
 
 typedef void* (*wwhd_theater_next_fn)(void);
 typedef void (*wwhd_theater_present_fn)(void* command_buffer);
@@ -129,6 +134,23 @@ static void draw_tab() {
             note("Motion received: %.2f %.2f %.2f rad/s. Aim (bow, hookshot, telescope, first person) and move the "
                  "controller; keep the right stick still. The game's own Options > Gyro must be on.", rate[0], rate[1], rate[2]);
     }
+    ImGui::SeparatorText("Rumble");
+    {
+        bool on = false;
+        if (check("Rumble", rumble::enabled(), &on)) hostui::post([on] { rumble::set_enabled(on); });
+        if (rumble::enabled()) {
+            float strength = input::g_rumble_strength.load() * 100.0f;
+            if (ImGui::SliderFloat("Rumble strength", &strength, 10.0f, 100.0f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp))
+                input::g_rumble_strength = strength / 100.0f;  // live
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                hostui::post([strength] { hostui::set("visionos.rumbleStrength", std::to_string(int(std::lround(strength)))); });
+        }
+        const int with = input::g_rumble_controllers.load();
+        if (with > 0)
+            note("The controller vibrates when the game rumbles.");
+        else if (with == 0)
+            note("visionOS gives apps no vibration for this controller (PlayStation and Xbox controllers have it).");
+    }
     ImGui::SeparatorText("3D");
     bool on3d = false;
     if (check("3D", depth3d::enabled.load(), &on3d))
@@ -192,6 +214,8 @@ void theater_init() {
     tab.draw = draw_tab;
     overlay::ext::add_tab(std::move(tab), "audio");
     std::string saved;
+    if (hostui::get("visionos.rumbleStrength", saved))
+        input::g_rumble_strength = std::clamp(std::strtof(saved.c_str(), nullptr) / 100.0f, 0.1f, 1.0f);
     if (hostui::get("visionos.autoHideControls", saved)) g_autohide = saved != "0";
     if (hostui::get("visionos.spatialSound", saved)) g_spatial_sound = saved != "0";
     if (hostui::get("visionos.spatialBoost", saved)) g_spatial_boost = std::clamp(std::strtof(saved.c_str(), nullptr), 0.0f, 18.0f);
