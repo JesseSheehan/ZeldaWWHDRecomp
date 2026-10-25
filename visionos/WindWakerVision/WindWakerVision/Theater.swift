@@ -111,7 +111,7 @@ enum TheaterOutput {
         var w: Int32 = 0, h: Int32 = 0
         wwhd_visionos_tv_picture_size(&w, &h)
         let eye = min(3840, max(2560, Int(w)))
-        height = eye * 9 / 16
+        height = min(2160, Int(Double(eye) / ScreenPicture.shared.aspect) / 2 * 2)
         width = stereo ? 2 * eye : eye
         let descriptor = TextureResource.DrawableQueue.Descriptor(pixelFormat: .bgra8Unorm_srgb, width: width, height: height,
                                                                   usage: [.renderTarget, .shaderRead], mipmapsMode: .none)
@@ -166,6 +166,14 @@ enum TheaterOutput {
     private var screen: Entity?, reflection: Entity?
     private var owner: ObjectIdentifier?
     private var pattern = false
+    /// The game window's shape while its screen has the picture (nil: Full Screen's)
+    var windowShape: Double?
+    /// The picture's shape now: the Aspect ratio setting, or with "Match window" the window's (Full Screen: 16:9)
+    var aspect: Double {
+        let a = PictureShape.shared.aspect
+        return a > 0 ? a : windowShape ?? 16.0 / 9.0
+    }
+    private var textureAspect = 0.0  // the shape the texture was made for
 
     private init() {
         Task { @MainActor in
@@ -184,6 +192,7 @@ enum TheaterOutput {
                                        options: .init(semantic: .color))
         guard let texture else { return }
         if !pattern { try? TheaterOutput.start(on: texture, stereo: true) }
+        textureAspect = aspect
         showsStereoLook = false
         applyLook()
         if let reflection {
@@ -207,6 +216,13 @@ enum TheaterOutput {
     /// every frame: the per-eye material once it has loaded (a material change only, once)
     func check() {
         if !showsStereoLook, stereoLook != nil, screen != nil { applyLook() }
+        // the picture changed shape (Settings > Graphics > Aspect ratio, or the window with "Match window"):
+        // a texture of that shape, so the picture fills the screen without bars
+        if let texture, !pattern, abs(aspect - textureAspect) > 0.005 {
+            textureAspect = aspect
+            TheaterOutput.stop()
+            try? TheaterOutput.start(on: texture, stereo: true)
+        }
     }
 
     private func applyLook() {
@@ -264,6 +280,7 @@ struct TheaterSpace: View {
             reflection.addChild(ModelEntity(mesh: Self.reflectionMesh(theater.size), materials: []))
             world.addChild(reflection)
             // the picture on both, 2D or 3D (ScreenPicture)
+            ScreenPicture.shared.windowShape = nil
             ScreenPicture.shared.attach(screen: screen, reflection: reflection, pattern: pattern, owner: animation)
             animation.shown = true
             if ProcessInfo.processInfo.environment["WWHD_TEST_THEATER"] == "stereo" { Self.testStereoMaterial(on: screen) }
@@ -323,7 +340,7 @@ struct TheaterSpace: View {
         let size = theater.size, onSea = theater.surroundings == .sky
         // the controls float here only while the GamePad window (which carries them) is closed
         controls?.isEnabled = !gamepad.open
-        let key = "\(size.rawValue) \(onSea)"
+        let key = "\(size.rawValue) \(onSea) \(PictureShape.shared.fullScreenAspect)"
         if let model = screen.components[ModelComponent.self], screen.name != key {
             var m = model
             m.mesh = Self.screenMesh(size, onSea: onSea)
@@ -357,7 +374,7 @@ struct TheaterSpace: View {
     /// Where the screen is: its centre and bottom edge (m up). On the sea it stands just above the water,
     /// so its reflection starts right under it; in the room it leaves space under it for the controls.
     static func layout(_ size: Theater.Size, onSea: Bool) -> (center: Float, bottom: Float) {
-        let h = size.width * 9 / 16
+        let h = size.width / Float(PictureShape.shared.fullScreenAspect)
         let center = onSea ? seaLevel + 0.12 + h / 2 : max(1.4, h / 2 + 0.7)
         return (center, center - h / 2)
     }
@@ -403,7 +420,7 @@ struct TheaterSpace: View {
     /// The screen's curved quad strip; `place` moves each vertex (the reflection lays it onto the sea).
     private static func curvedMesh(_ size: Theater.Size, onSea: Bool, name: String, rows: ClosedRange<Float> = 0...1,
                                    place: (SIMD3<Float>) -> SIMD3<Float>) -> MeshResource {
-        let r = size.distance, w = size.width, h = w * 9 / 16
+        let r = size.distance, w = size.width, h = w / Float(PictureShape.shared.fullScreenAspect)
         let centerY = layout(size, onSea: onSea).center, bottomY = centerY - h / 2
         let span = w / r, columns = 48
         var positions: [SIMD3<Float>] = [], normals: [SIMD3<Float>] = [], uvs: [SIMD2<Float>] = []
@@ -670,7 +687,7 @@ struct TheaterControls: View {
             for i in 0..<count {
                 let e = Entity()
                 // the same loudness at every screen size: no fall-off with distance
-                e.components.set(SpatialAudioComponent(gain: .zero, directLevel: .zero, reverbLevel: -12, directivity: .beam(focus: 0),
+                e.components.set(SpatialAudioComponent(gain: wwhd_visionos_spatial_boost(), directLevel: .zero, reverbLevel: -12, directivity: .beam(focus: 0),
                                                        distanceAttenuation: .rolloff(factor: 0)))
                 root.addChild(e)
                 sources.append(e)
@@ -678,7 +695,7 @@ struct TheaterControls: View {
             }
             wwhd_visionos_audio_external(1)
             placed = ""
-            boost = -1
+            boost = wwhd_visionos_spatial_boost()  // (set on each source from the start: changes only later)
         } catch {
             NSLog("[audio] Full Screen sound sources: %@", error.localizedDescription)
             stop()
@@ -702,5 +719,42 @@ struct TheaterControls: View {
             }
             return noErr
         }
+    }
+}
+
+/// The TV picture's shape (Settings > Graphics > Aspect ratio), polled twice a second: the game window takes
+/// it (keeping its height; resizing keeps it), and so do Full Screen's screen and the picture's texture
+/// (ScreenPicture), so the picture fills them with no bars. "Match window" (0): the window is resized
+/// freely and the game draws to its shape; Full Screen stays 16:9. Bars the game draws itself stay.
+@Observable @MainActor final class PictureShape {
+    static let shared = PictureShape()
+    private(set) var aspect = 16.0 / 9.0  // 0: "Match window"
+    var fullScreenAspect: Double { aspect > 0 ? aspect : 16.0 / 9.0 }
+    @ObservationIgnored weak var windowScene: UIWindowScene?  // the game window's (GameLayerView)
+    @ObservationIgnored private var timer: Timer?
+
+    private init() {
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in MainActor.assumeIsolated { PictureShape.shared.poll() } }
+    }
+
+    private func poll() {
+        let a = wwhd_visionos_picture_aspect()
+        guard a.isFinite, abs(a - aspect) > 0.005 else { return }
+        aspect = a
+        shapeWindow()
+    }
+
+    /// The game window to the picture's shape, at its height (or free with "Match window").
+    func shapeWindow() {
+        guard let scene = windowScene else { return }
+        let size = scene.effectiveGeometry.coordinateSpace.bounds.size
+        let preferences: UIWindowScene.GeometryPreferences.Vision
+        if aspect > 0, size.height > 0 {
+            preferences = .init(size: CGSize(width: size.height * aspect, height: size.height), minimumSize: nil, maximumSize: nil,
+                                resizingRestrictions: .uniform)
+        } else {
+            preferences = .init(size: nil, minimumSize: nil, maximumSize: nil, resizingRestrictions: .freeform)
+        }
+        scene.requestGeometryUpdate(preferences) { error in NSLog("[visionos] window shape: %@", error.localizedDescription) }
     }
 }

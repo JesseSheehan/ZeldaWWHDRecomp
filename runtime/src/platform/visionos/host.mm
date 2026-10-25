@@ -38,6 +38,7 @@
 #include <tuple>
 
 #include "gfx/display.h"
+#include "aspect.h"
 #include "gfx/display_modes.h"
 #include "gfx/metal.h"
 #include "gfx/renderer.h"
@@ -1155,6 +1156,12 @@ extern "C" int wwhd_visionos_shader_progress(double* fraction) {
 extern "C" void wwhd_visionos_tv_picture_size(int* width, int* height) {
     *width = (int)gfx::nominal_w(gfx::R.tv);
     *height = (int)gfx::nominal_h(gfx::R.tv);
+}
+
+// Settings > Graphics > Aspect ratio (aspect.h): the TV picture's shape, or 0 for "Match window" (the app
+// shapes the game window, Full Screen's screen and their texture to it: PictureShape)
+extern "C" double wwhd_visionos_picture_aspect(void) {
+    return aspect::mode() == aspect::kWindow ? 0 : aspect::requested();
 }
 
 // 3D (gfx/depth3d.h) is on: Full Screen then sizes its texture for two eyes and uses the per-eye material

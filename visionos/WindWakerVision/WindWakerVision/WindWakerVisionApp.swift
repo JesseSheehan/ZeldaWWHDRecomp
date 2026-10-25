@@ -173,6 +173,7 @@ extension TVWindow {
 /// The TV picture: hands its layer to the runtime while the window is open (closed: the game runs on).
 struct GameView: View {
     @Environment(\.scenePhase) private var scenePhase
+    private let shape = PictureShape.shared
     @State private var view = GameLayerView()
 
     // The game shows on a RealityKit screen over the layer view (StereoWindowScreen: 2D or 3D, the same
@@ -184,7 +185,7 @@ struct GameView: View {
             MetalLayerView { view }
             if !Theater.shared.active { StereoWindowScreen() }
         }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .aspectRatio(shape.aspect > 0 ? shape.aspect : nil, contentMode: .fit)
         .overlay { ShaderPreparationView() }
         .onAppear { view.attach(true) }
         .onDisappear { view.attach(false) }
@@ -216,6 +217,7 @@ struct StereoWindowScreen: View {
                 // the screen fills the view (points to metres)
                 guard geometry.size != state.size, geometry.size.width > 0 else { return }
                 state.size = geometry.size
+                ScreenPicture.shared.windowShape = geometry.size.width / geometry.size.height  // ("Match window")
                 let w = Float(metrics.convert(geometry.size.width, to: .meters)), h = Float(metrics.convert(geometry.size.height, to: .meters))
                 if var model = screen.components[ModelComponent.self] {
                     model.mesh = .generatePlane(width: w, height: h)
@@ -441,6 +443,10 @@ final class GameLayerView: GameControllerLayerView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         Self.anchorSound(to: window?.windowScene)
+        if let scene = window?.windowScene {
+            PictureShape.shared.windowScene = scene
+            PictureShape.shared.shapeWindow()
+        }
         guard window != nil, !Self.started else { return }
         Self.started = true
         updateDrawableSize()
