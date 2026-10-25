@@ -71,9 +71,34 @@ final class WindowOpener {
     /// + (Start): the TV window if it is closed, otherwise the GamePad window if that is (the game shows
     /// its menus there). − (Settings): the TV window if it is closed. While the TV window is closed the
     /// runtime keeps that press from the game and from Settings (host.mm).
-    func buttonPressed(start: Bool) {
+    @MainActor func buttonPressed(start: Bool) {
+        WindowControls.shared.poke()
         if !TVWindowState.shared.open, !Theater.shared.active { openTV() }
         else if start, !GamePadWindowState.shared.open { openGamePad() }
+    }
+}
+
+/// The buttons under the TV window fade out after a few seconds of play (Settings > Vision Pro, on at
+/// first) and come back on a tap on the window, on − or +, and while the settings are open; never hidden
+/// with VoiceOver on.
+@Observable @MainActor final class WindowControls {
+    static let shared = WindowControls()
+    private(set) var shown = true
+    @ObservationIgnored private var hideAt = Date()
+    @ObservationIgnored private var timer: Timer?
+
+    /// Show them (again) for a few seconds.
+    func poke() {
+        hideAt = Date() + 3
+        if !shown { withAnimation(.easeOut(duration: 0.25)) { shown = true } }
+        if timer == nil {
+            timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in MainActor.assumeIsolated { WindowControls.shared.tick() } }
+        }
+    }
+
+    private func tick() {
+        let keep = wwhd_visionos_autohide_controls() == 0 || wwhd_visionos_settings_open() != 0 || UIAccessibility.isVoiceOverRunning
+        if keep { poke() } else if shown, Date() >= hideAt { withAnimation(.easeInOut(duration: 0.6)) { shown = false } }
     }
 }
 
@@ -86,6 +111,7 @@ struct TVWindow: View {
     private let gamepad = GamePadWindowState.shared
     private let library = GameLibrary.shared
     private let resume = ResumeOffer.shared
+    private let controls = WindowControls.shared
 
     var body: some View {
         content
@@ -119,11 +145,15 @@ struct TVWindow: View {
 
     private var game: some View {
         GameView()
-            .ornament(attachmentAnchor: .scene(.bottom)) {
+            .contentShape(Rectangle())
+            .simultaneousGesture(SpatialTapGesture().onEnded { _ in controls.poke() })
+            .onAppear { controls.poke() }
+            .ornament(visibility: controls.shown ? .visible : .hidden, attachmentAnchor: .scene(.bottom)) {
                 HStack {
-                    Button { wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
+                    Button { controls.poke(); wwhd_visionos_toggle_settings() } label: { Label("Settings", systemImage: "gearshape") }
                     Button { Task { await Theater.shared.enter() } } label: { Label("Full Screen", systemImage: "mountain.2") }
                     Button {
+                        controls.poke()
                         if gamepad.open { dismissWindow(id: "gamepad", value: GamePadWindowState.value) } else { openGamePad() }
                     } label: {
                         Label(gamepad.open ? "Close GamePad screen" : "Open GamePad screen", systemImage: "gamecontroller")

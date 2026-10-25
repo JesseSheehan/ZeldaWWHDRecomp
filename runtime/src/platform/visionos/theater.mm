@@ -49,6 +49,7 @@ static std::atomic<wwhd_theater_action_fn> g_action{nullptr};
 static std::atomic<int> g_active{0}, g_size{1}, g_environment{0};
 static std::atomic<bool> g_game_memory{false};  // the game's memory is set up (theater_init ran)
 static std::atomic<bool> g_spatial_sound{true};  // Full Screen's sound from the screen and around you (TheaterSound)
+static std::atomic<bool> g_autohide{true};       // the TV window's buttons hide during play (WindowControls)
 static std::atomic<float> g_spatial_boost{9};     // its sources' gain (dB): about the window's loudness
 
 // any thread: theater mode is on, and the size of its texture
@@ -97,6 +98,14 @@ static void draw_tab() {
         else
             note("Waiting: the picture is not enlarged right now (the window shows it at its size or smaller).");
     }
+    bool autohide = false;
+    if (check("Hide the window's buttons while playing", g_autohide.load(), &autohide))
+        hostui::post([autohide] {
+            g_autohide = autohide;
+            hostui::set("visionos.autoHideControls", autohide ? "1" : "0");
+        });
+    note("The buttons under the game window fade out after a few seconds; tap the window, or press - or +, to "
+         "bring them back.");
     ImGui::SeparatorText("Motion aiming");
     {
         motion::Settings g = motion::settings();
@@ -183,6 +192,7 @@ void theater_init() {
     tab.draw = draw_tab;
     overlay::ext::add_tab(std::move(tab), "audio");
     std::string saved;
+    if (hostui::get("visionos.autoHideControls", saved)) g_autohide = saved != "0";
     if (hostui::get("visionos.spatialSound", saved)) g_spatial_sound = saved != "0";
     if (hostui::get("visionos.spatialBoost", saved)) g_spatial_boost = std::clamp(std::strtof(saved.c_str(), nullptr), 0.0f, 18.0f);
     g_game_memory = true;
@@ -204,6 +214,7 @@ extern "C" void wwhd_visionos_set_theater(wwhd_theater_next_fn next, wwhd_theate
     else LOG("[visionos] theater screen off");
 }
 
+extern "C" int wwhd_visionos_autohide_controls() { return visionos::g_autohide.load(); }
 extern "C" int wwhd_visionos_spatial_sound() { return visionos::g_spatial_sound.load(); }
 extern "C" double wwhd_visionos_spatial_boost() { return visionos::g_spatial_boost.load(); }
 
