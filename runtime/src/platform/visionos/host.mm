@@ -51,6 +51,7 @@
 #include "imgui.h"
 #include "backends/imgui_impl_metal.h"
 #include "mods/mods.h"
+#include "motion/motion.h"
 #include "overlay/guest_hud.h"
 #include "overlay/hostui.h"
 #include "overlay/overlay.h"
@@ -941,6 +942,67 @@ void host_controller_values(float* v) {
     std::copy(g_host_values, g_host_values + input_map::kPadCount, v);
 }
 
+// ---- motion sensors (motion/motion.h), as the AppKit host (gfx/input.mm update_motion_sensors) ----
+// GameController.framework reports the gyro and accelerometer of DualSense, DualShock 4 and Switch Pro
+// controllers. Its frame (a controller lying flat): x right, y towards the top (away from the player), z up
+// out of the face; acceleration in g with gravity's sign. motion.h takes SDL's frame (x right, y up, z
+// towards the player, m/s^2 of specific force): sdl = (x, z, -y), acceleration negated. On while the Gyro
+// source is "controller" (Settings > Controls > Gyro). WWHD_GYRO_LOG=1 logs a raw sample twice a second.
+static void update_motion_sensors() {
+    const bool want = motion::wants_controller_sensors();
+    static NSMutableSet* active = [NSMutableSet set];  // controllers whose handler is installed
+    int n = 0;
+    NSArray<GCController*>* connected = [GCController controllers];
+    for (GCController* c in [active allObjects])
+        if (![connected containsObject:c]) {
+            [active removeObject:c];
+            c.motion.valueChangedHandler = nil;
+            motion::controller_gone((uint64_t)(uintptr_t)(__bridge void*)c);
+        }
+    for (GCController* c in connected) {
+        GCMotion* m = c.motion;
+        if (!m || !m.hasRotationRate) continue;
+        n++;
+        const bool on = [active containsObject:c];
+        // the system can switch a controller's sensors off (sleep, another app): on again while wanted
+        if (want && on && m.sensorsRequireManualActivation && !m.sensorsActive) {
+            LOG("[gyro] %s: its motion sensors were off, switching them on again", c.vendorName.UTF8String ?: "controller");
+            m.sensorsActive = YES;
+        }
+        if (want == on) continue;
+        if (want) {
+            [active addObject:c];
+            if (m.sensorsRequireManualActivation) m.sensorsActive = YES;
+            const uint64_t id = (uint64_t)(uintptr_t)(__bridge void*)c;
+            LOG("[gyro] %s: motion sensors on", c.vendorName.UTF8String ?: "controller");
+            m.valueChangedHandler = ^(GCMotion* mm) {
+                if (overlay::blocks_input()) return;
+                GCRotationRate r = mm.rotationRate;
+                GCAcceleration a = mm.hasGravityAndUserAcceleration
+                                       ? GCAcceleration{mm.gravity.x + mm.userAcceleration.x, mm.gravity.y + mm.userAcceleration.y,
+                                                        mm.gravity.z + mm.userAcceleration.z}
+                                       : mm.acceleration;
+                const float g = 9.80665f;
+                float gyro[3] = {(float)r.x, (float)r.z, (float)-r.y};
+                float acc[3] = {(float)-a.x * g, (float)-a.z * g, (float)a.y * g};
+                static const bool log = getenv("WWHD_GYRO_LOG") != nullptr;
+                static double last_log = 0;
+                if (log && CACurrentMediaTime() - last_log > 0.5) {
+                    last_log = CACurrentMediaTime();
+                    LOG("[gyro] GameController raw: rate %.3f %.3f %.3f rad/s, acc %.3f %.3f %.3f g", r.x, r.y, r.z, a.x, a.y, a.z);
+                }
+                motion::controller_sample(id, 0, gyro, acc);
+            };
+        } else {
+            [active removeObject:c];
+            m.valueChangedHandler = nil;
+            if (m.sensorsRequireManualActivation) m.sensorsActive = NO;
+            motion::controller_gone((uint64_t)(uintptr_t)(__bridge void*)c);
+        }
+    }
+    motion::set_gyro_controllers(n);
+}
+
 void init() {
     input_map::load_startup();
     auto describe = [](GCController* c, const char* what) {
@@ -985,6 +1047,13 @@ void init() {
             std::copy(v, v + input_map::kPadCount, g_host_values);
         }
         visionos::text_input_poll();
+        // gyro: sensors on or off with the source (a quarter second), the recalibrate binding
+        static int tick = 0;
+        if (tick++ % 60 == 0) update_motion_sensors();
+        if (!overlay::blocks_input()) {
+            static const bool no_keys[256] = {};
+            motion::poll_recalibrate(game, no_keys);
+        }
     }];
 }
 

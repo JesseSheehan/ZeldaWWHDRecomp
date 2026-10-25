@@ -97,6 +97,10 @@ game folder, and the other way round.
   (Start) also opens it. While it is closed, the GamePad screen is shown in a corner of the game window
   (picture-in-picture). Look at the GamePad window and pinch to touch it (the map, the items screen).
   Settings > Display chooses another GamePad screen mode (picture-in-picture, automatic, off, GamePad only).
+- **Motion aiming**: Settings > Controls > Gyro... > Controller gyro uses the controller's motion sensors
+  (DualSense, DualShock 4, Switch Pro Controller) as the GamePad's: aim the bow, hookshot, boomerang,
+  telescope and first-person view by moving the controller, as on the Wii U. Sensitivity, invert and a
+  recalibrate button are there too; the game's own Options > Gyro switch still has to be on.
 - **Gear button** below either window: the settings menu, without the controller.
 - **Full Screen**: the full-screen button below the game window, or Settings > Vision Pro. The game moves
   to a big, slightly curved screen: on The Great Sea under a bright sky, with the picture reflected
