@@ -38,6 +38,7 @@ extern "C" double wwhd_visionos_gyro_last(float rate[3]);  // host.mm: the last 
 namespace input {
 extern std::atomic<float> g_rumble_strength;    // host.mm: rumble strength (0..1)
 extern std::atomic<int> g_rumble_controllers;   // host.mm: controllers with haptics (-1: not looked yet)
+extern std::atomic<int> g_rumble_test;          // host.mm: Test rumble (updates of full strength left)
 }  // namespace input
 
 typedef void* (*wwhd_theater_next_fn)(void);
@@ -145,6 +146,7 @@ static void draw_tab() {
             if (ImGui::IsItemDeactivatedAfterEdit())
                 hostui::post([strength] { hostui::set("visionos.rumbleStrength", std::to_string(int(std::lround(strength)))); });
         }
+        if (ImGui::Button("Test rumble")) input::g_rumble_test = 30;  // half a second at full strength
         const int with = input::g_rumble_controllers.load();
         if (with > 0)
             note("The controller vibrates when the game rumbles.");
