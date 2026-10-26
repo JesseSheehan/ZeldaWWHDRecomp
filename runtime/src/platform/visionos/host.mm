@@ -914,17 +914,35 @@ std::atomic<float> g_rumble_strength{1};    // Settings > Vision Pro > Rumble st
 std::atomic<int> g_rumble_controllers{-1};  // controllers with haptics (-1: not looked yet)
 struct HapticMotor {
     CHHapticEngine* engine = nil;
-    id<CHHapticAdvancedPatternPlayer> player = nil;
+    id<CHHapticAdvancedPatternPlayer> player = nil;  // nil: short pulses instead (pulse())
     bool playing = false;
+    double retry_at = 0;      // not ready: try again then (the haptics service can be slow at launch)
+    int attempts = 0;
+    double next_pulse = 0;
 };
 static std::map<uintptr_t, HapticMotor> g_motors;  // by controller (main thread)
 
+static CHHapticPattern* buzz(float intensity, double seconds, NSError** err) {
+    CHHapticEvent* e = [[CHHapticEvent alloc]
+        initWithEventType:CHHapticEventTypeHapticContinuous
+               parameters:@[ [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:intensity],
+                             [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.3f] ]
+             relativeTime:0
+                 duration:seconds];
+    return [[CHHapticPattern alloc] initWithEvents:@[ e ] parameters:@[] error:err];
+}
+
 static HapticMotor* motor_for(GCController* c) {
-    auto it = g_motors.find((uintptr_t)(__bridge void*)c);
-    if (it != g_motors.end()) return it->second.engine ? &it->second : nullptr;
     HapticMotor& m = g_motors[(uintptr_t)(__bridge void*)c];
+    if (m.engine) return &m;
+    const double now = CACurrentMediaTime();
+    if (now < m.retry_at || m.attempts >= 5) return nullptr;
+    m.attempts++;
+    m.retry_at = now + 3;
+    const char* name = c.vendorName.UTF8String ?: "controller";
     if (!c.haptics) {
-        LOG("[rumble] %s: no haptics on this platform", c.vendorName.UTF8String ?: "controller");
+        LOG("[rumble] %s: visionOS gives no haptics for it", name);
+        m.attempts = 5;
         return nullptr;
     }
     NSError* err = nil;
@@ -932,35 +950,36 @@ static HapticMotor* motor_for(GCController* c) {
     engine.playsHapticsOnly = YES;
     engine.autoShutdownEnabled = NO;
     if (!engine || ![engine startAndReturnError:&err]) {
-        LOG("[rumble] %s: haptics did not start (%s)", c.vendorName.UTF8String ?: "controller", err.localizedDescription.UTF8String ?: "");
+        LOG("[rumble] %s: haptics did not start (%s; attempt %d)", name, err.localizedDescription.UTF8String ?: "", m.attempts);
         return nullptr;
     }
-    CHHapticEvent* buzz = [[CHHapticEvent alloc]
-        initWithEventType:CHHapticEventTypeHapticContinuous
-               parameters:@[ [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1],
-                             [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.3f] ]
-             relativeTime:0
-                 duration:30];
-    CHHapticPattern* pattern = [[CHHapticPattern alloc] initWithEvents:@[ buzz ] parameters:@[] error:&err];
+    // one long event whose intensity follows the level; if the controller cannot take that, short pulses
+    CHHapticPattern* pattern = buzz(1, 10, &err);
     id<CHHapticAdvancedPatternPlayer> player = pattern ? [engine createAdvancedPlayerWithPattern:pattern error:&err] : nil;
-    if (!player) {
-        LOG("[rumble] %s: no haptic player (%s)", c.vendorName.UTF8String ?: "controller", err.localizedDescription.UTF8String ?: "");
-        [engine stopWithCompletionHandler:nil];
-        return nullptr;
-    }
-    player.loopEnabled = YES;
+    if (player) player.loopEnabled = YES;
+    else LOG("[rumble] %s: no continuous player (%s): short pulses", name, err.localizedDescription.UTF8String ?: "");
     // the engine stops when the app leaves the front or the controller resets: start it again on the next use
     HapticMotor* mp = &m;
     engine.resetHandler = ^{ dispatch_async(dispatch_get_main_queue(), ^{ mp->playing = false; [mp->engine startAndReturnError:nil]; }); };
     engine.stoppedHandler = ^(CHHapticEngineStoppedReason) { dispatch_async(dispatch_get_main_queue(), ^{ mp->playing = false; }); };
     m.engine = engine;
     m.player = player;
-    LOG("[rumble] %s: haptics ready", c.vendorName.UTF8String ?: "controller");
+    LOG("[rumble] %s: haptics ready", name);
     return &m;
 }
 
 static void set_motor(HapticMotor& m, float level) {
     NSError* err = nil;
+    if (!m.player) {  // pulses: a 0.12 s buzz at the level, about every 0.1 s while it lasts
+        const double now = CACurrentMediaTime();
+        if (level <= 0 || now < m.next_pulse) return;
+        m.next_pulse = now + 0.1;
+        CHHapticPattern* p = buzz(level, 0.12, &err);
+        id<CHHapticPatternPlayer> player = p ? [m.engine createPlayerWithPattern:p error:&err] : nil;
+        if (!m.playing) m.playing = [m.engine startAndReturnError:nil];
+        [player startAtTime:CHHapticTimeImmediate error:&err];
+        return;
+    }
     if (level <= 0) {
         if (m.playing) [m.player stopAtTime:CHHapticTimeImmediate error:&err];
         m.playing = false;
@@ -981,7 +1000,7 @@ static void update_rumble() {
     static int tick = 0;
     const float level = std::clamp(rumble::host_level(16667) * g_rumble_strength.load(), 0.0f, 1.0f);
     const bool look = tick++ % 60 == 0;  // once a second: controllers that came or went
-    if (!look && std::fabs(level - shown) < 0.02f) return;
+    if (!look && std::fabs(level - shown) < 0.02f && level <= 0) return;
     shown = level;
     int with = 0;
     for (GCController* c in [GCController controllers]) {
