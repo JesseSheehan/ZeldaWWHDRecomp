@@ -39,6 +39,7 @@ namespace input {
 extern std::atomic<float> g_rumble_strength;    // host.mm: rumble strength (0..1)
 extern std::atomic<int> g_rumble_controllers;   // host.mm: controllers with haptics (-1: not looked yet)
 extern std::atomic<int> g_rumble_test;          // host.mm: Test rumble (updates of full strength left)
+extern std::atomic<bool> g_rumble_hung;         // host.mm: the haptics service stopped answering
 }  // namespace input
 
 typedef void* (*wwhd_theater_next_fn)(void);
@@ -148,7 +149,11 @@ static void draw_tab() {
         }
         if (ImGui::Button("Test rumble")) input::g_rumble_test = 30;  // half a second at full strength
         const int with = input::g_rumble_controllers.load();
-        if (with > 0)
+        if (input::g_rumble_hung.load())
+            note("visionOS's vibration service stopped answering for this controller, so rumble is off until the "
+                 "game starts again. The Switch Pro Controller's vibration does not work for apps on visionOS; "
+                 "PlayStation and Xbox controllers' does.");
+        else if (with > 0)
             note("The controller vibrates when the game rumbles.");
         else if (with == 0)
             note("visionOS gives apps no vibration for this controller (PlayStation and Xbox controllers have it).");

@@ -921,7 +921,17 @@ struct HapticMotor {
     int attempts = 0;
     double next_pulse = 0;
 };
-static std::map<uintptr_t, HapticMotor> g_motors;  // by controller (main thread)
+static std::map<uintptr_t, HapticMotor> g_motors;  // by controller (haptics queue)
+// Core Haptics calls can block for a long time when visionOS's haptics service does not answer for a
+// controller (the Switch Pro Controller: its first pulse never returned and the app froze), so they all
+// run on their own queue, never the main thread, one job at a time; a job that has not finished after
+// 2 s means the service hangs: rumble stops being sent (g_rumble_hung) instead of piling up.
+static dispatch_queue_t haptics_queue() {
+    static dispatch_queue_t q = dispatch_queue_create("wwhd.haptics", DISPATCH_QUEUE_SERIAL);
+    return q;
+}
+static std::atomic<double> g_haptics_busy_since{0};  // a job runs since then (0: idle)
+std::atomic<bool> g_rumble_hung{false};
 
 static CHHapticPattern* buzz(float intensity, double seconds, NSError** err) {
     CHHapticEvent* e = [[CHHapticEvent alloc]
@@ -980,8 +990,8 @@ static HapticMotor* motor_for(GCController* c) {
     if (!player) LOG("[rumble] %s: short pulses", name);
     // the engine stops when the app leaves the front or the controller resets: start it again on the next use
     HapticMotor* mp = &m;
-    engine.resetHandler = ^{ dispatch_async(dispatch_get_main_queue(), ^{ mp->playing = false; [mp->engine startAndReturnError:nil]; }); };
-    engine.stoppedHandler = ^(CHHapticEngineStoppedReason) { dispatch_async(dispatch_get_main_queue(), ^{ mp->playing = false; }); };
+    engine.resetHandler = ^{ dispatch_async(haptics_queue(), ^{ mp->playing = false; [mp->engine startAndReturnError:nil]; }); };
+    engine.stoppedHandler = ^(CHHapticEngineStoppedReason) { dispatch_async(haptics_queue(), ^{ mp->playing = false; }); };
     m.engine = engine;
     m.player = player;
     LOG("[rumble] %s: haptics ready", name);
@@ -1020,7 +1030,7 @@ static void set_motor(HapticMotor& m, float level) {
     [m.player sendParameters:@[ p ] atTime:CHHapticTimeImmediate error:&err];
 }
 
-static void update_rumble() {
+static void update_rumble() {  // main thread
     static float shown = 0;
     static int tick = 0;
     float level = std::clamp(rumble::host_level(16667) * g_rumble_strength.load(), 0.0f, 1.0f);
@@ -1033,22 +1043,46 @@ static void update_rumble() {
     if (level > 0 && shown <= 0 && requests < 5) LOG("[rumble] the game rumbles (%.2f; request %d)", level, ++requests);
     if (!look && std::fabs(level - shown) < 0.02f && level <= 0) return;
     shown = level;
-    int with = 0;
-    for (GCController* c in [GCController controllers]) {
-        if (!c.extendedGamepad) continue;
-        if (HapticMotor* m = motor_for(c)) {
-            with++;
-            set_motor(*m, level);
+    if (g_rumble_hung.load()) return;
+    const double busy = g_haptics_busy_since.load(), now = CACurrentMediaTime();
+    if (busy > 0) {
+        if (now - busy > 2) {
+            g_rumble_hung = true;
+            g_rumble_controllers = 0;
+            LOG("[rumble] visionOS's haptics service does not answer for this controller: rumble off until the next start");
         }
+        return;  // (the last job still runs: this level is skipped)
     }
-    g_rumble_controllers = with;
+    NSMutableArray<GCController*>* pads = [NSMutableArray array];
+    for (GCController* c in [GCController controllers])
+        if (c.extendedGamepad) [pads addObject:c];
+    g_haptics_busy_since = now;
+    dispatch_async(haptics_queue(), ^{
+        @try {
+            int with = 0;
+            for (GCController* c in pads)
+                if (HapticMotor* m = motor_for(c)) {
+                    with++;
+                    set_motor(*m, level);
+                }
+            g_rumble_controllers = with;
+        } @catch (NSException* e) {
+            LOG("[rumble] haptics failed: %s", e.reason.UTF8String ?: "exception");
+        }
+        g_haptics_busy_since = 0;
+    });
 }
 
 bool has_rumble() { return true; }
 void stop_rumble_now() {
-    if (![NSThread isMainThread]) return;
-    for (auto& [_, m] : g_motors)
-        if (m.engine) set_motor(m, 0);
+    if (g_rumble_hung.load()) return;
+    dispatch_async(haptics_queue(), ^{
+        @try {
+            for (auto& [_, m] : g_motors)
+                if (m.engine) set_motor(m, 0);
+        } @catch (NSException*) {
+        }
+    });
 }
 bool pro_controller() { return g_pro.load(std::memory_order_relaxed); }
 void set_controller_listener(void (*fn)(bool pro)) { g_controller_listener = fn; }
